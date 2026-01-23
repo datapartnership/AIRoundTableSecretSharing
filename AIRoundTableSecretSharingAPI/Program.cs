@@ -1,0 +1,31 @@
+using AIRoundTableSecretSharingAPI.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+// Add services to the container.
+// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// In-memory storage for demo (use database in production)
+builder.Services.AddSingleton<InMemoryDataStore>();
+
+var app = builder.Build();
+
+var dataStore = app.Services.GetRequiredService<InMemoryDataStore>();
+dataStore.SeedData();
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseAuthorization();
+app.MapControllers();
+
+app.UseHttpsRedirection();
+
+app.Run();
