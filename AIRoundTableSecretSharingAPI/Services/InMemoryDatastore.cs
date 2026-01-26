@@ -20,22 +20,22 @@ public class InMemoryDataStore
             {
                 new ProducerInfo
                 {
-                    ProducerId = "whatsapp",
-                    DisplayName = "WhatsApp",
+                    ProducerId = "partnerA",
+                    DisplayName = "Partner A",
                     JoinedDate = startDate,
                     IsActive = true
                 },
                 new ProducerInfo
                 {
-                    ProducerId = "telegram",
-                    DisplayName = "Telegram",
+                    ProducerId = "partnerB",
+                    DisplayName = "Partner B",
                     JoinedDate = startDate,
                     IsActive = true
                 },
                 new ProducerInfo
                 {
-                    ProducerId = "signal",
-                    DisplayName = "Signal",
+                    ProducerId = "partnerC",
+                    DisplayName = "Partner C",
                     JoinedDate = startDate,
                     IsActive = true
                 }
@@ -47,7 +47,7 @@ public class InMemoryDataStore
                 EpochId = 1,
                 StartDate = startDate,
                 EndDate = null,
-                ProducerIds = new List<string> { "signal", "telegram", "whatsapp" },
+                ProducerIds = new List<string> { "partnerA", "partnerB", "partnerC" },
                 ProducerCount = 3
             });
             

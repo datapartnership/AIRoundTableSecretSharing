@@ -81,12 +81,13 @@ public class ProducerClient
         foreach (var otherProducerId in producerIds.Where(id => id != _producerId))
         {
             // CRITICAL: Both producers compute the SAME noise independently
+            // IMPORTANT: maxNoise must be the SAME for all partners to ensure cancellation!
             var noise = DeterministicNoiseGenerator.GenerateNoise(
                 _producerId,
                 otherProducerId,
                 country,
                 monthStart,
-                maxNoise: actualValue / 5 // 20% of value
+                maxNoise: 100_000_000 // Fixed value agreed by all partners
             );
             
             // Determine sign based on alphabetical order
@@ -131,6 +132,7 @@ public class ProducerClient
             return new SubmissionResult
             {
                 Success = false,
+                ProducerId = _producerId,
                 Message = error
             };
         }
@@ -141,6 +143,7 @@ public class ProducerClient
         return new SubmissionResult
         {
             Success = true,
+            ProducerId = _producerId,
             Message = "Submitted successfully",
             OriginalValue = actualValue,
             MaskedValue = maskedValue,

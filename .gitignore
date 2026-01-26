@@ -89,3 +89,4 @@ publish-profiles/
 
 # Entity Framework Migrations
 **/Migrations/*.Designer.cs
+node_modules/
