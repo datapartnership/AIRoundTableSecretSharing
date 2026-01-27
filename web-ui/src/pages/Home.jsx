@@ -4,10 +4,11 @@ function Home() {
   return (
     <div className="animate-fade-in">
       <div className="hero">
-        <h1 className="hero-title">Privacy-Preserving Data Aggregation</h1>
+        <h1 className="hero-title">Privacy-Preserving Secure Aggregation</h1>
         <p className="hero-description">
-          Demonstrate how multiple partners (PartnerA, PartnerB, PartnerC) can submit sensitive data while keeping individual values private. 
-          Only the aggregate total is revealed — individual submissions remain hidden through deterministic noise cancellation.
+          Demonstrate how multiple partners can submit sensitive data while keeping individual values private — 
+          <strong> even from the aggregator</strong>. Using Elliptic Curve Diffie-Hellman (ECDH) key exchange, 
+          partners establish shared secrets that enable cryptographically secure noise cancellation.
         </p>
         <Link to="/partner/partnerA" className="btn btn-primary">
           🚀 Start Demo
@@ -16,20 +17,20 @@ function Home() {
 
       <div className="feature-grid">
         <div className="feature-card">
-          <div className="feature-icon">🔒</div>
-          <h3 className="feature-title">Privacy by Design</h3>
+          <div className="feature-icon">🔐</div>
+          <h3 className="feature-title">Cryptographically Secure</h3>
           <p className="feature-description">
-            Each partner adds deterministic noise to their value before submission. 
-            Individual values cannot be determined from submissions.
+            Uses ECDH P-256 key exchange to establish shared secrets. 
+            The aggregator <strong>cannot compute</strong> the noise, even though it facilitates the key exchange.
           </p>
         </div>
 
         <div className="feature-card">
-          <div className="feature-icon">🔗</div>
-          <h3 className="feature-title">No Communication Needed</h3>
+          <div className="feature-icon">🔑</div>
+          <h3 className="feature-title">Diffie-Hellman Magic</h3>
           <p className="feature-description">
-            Partners independently calculate the same pairwise noise using cryptographic hashing. 
-            No coordination or communication between partners required.
+            Partners exchange public keys through the aggregator, but derive shared secrets locally.
+            The aggregator sees public keys but cannot derive the shared secrets.
           </p>
         </div>
 
@@ -37,17 +38,17 @@ function Home() {
           <div className="feature-icon">✨</div>
           <h3 className="feature-title">Perfect Cancellation</h3>
           <p className="feature-description">
-            When all partners submit, the noise perfectly cancels out. 
-            The aggregator sees only the true total — nothing more.
+            Noise generated from shared secrets (via HMAC-SHA256) cancels perfectly when aggregated.
+            Only the true total is revealed — individual values remain hidden.
           </p>
         </div>
 
         <div className="feature-card">
-          <div className="feature-icon">🌍</div>
-          <h3 className="feature-title">Real-World Use Case</h3>
+          <div className="feature-icon">🛡️</div>
+          <h3 className="feature-title">Aggregator Cannot Cheat</h3>
           <p className="feature-description">
-            Ideal for scenarios like the World Bank collecting user statistics from messaging platforms 
-            without exposing competitive data.
+            Unlike basic hash-based noise, the aggregator cannot reverse-engineer individual values.
+            Security is based on the Computational Diffie-Hellman (CDH) problem.
           </p>
         </div>
       </div>
@@ -55,15 +56,16 @@ function Home() {
       <div className="card" style={{ marginTop: '3rem' }}>
         <div className="card-header">
           <span className="card-icon">📋</span>
-          <h2 className="card-title">How It Works</h2>
+          <h2 className="card-title">How the Secure Protocol Works</h2>
         </div>
         
         <div className="calc-step">
           <div className="step-number">1</div>
           <div className="step-content">
-            <div className="step-title">Partner Enters Actual Value</div>
+            <div className="step-title">Generate ECDH Key Pair</div>
             <div className="step-description">
-              Each partner (PartnerA, PartnerB, PartnerC) enters their actual monthly active users for a country.
+              Each partner generates an Elliptic Curve Diffie-Hellman key pair (P-256 curve).
+              The private key stays in your browser — only the public key is shared.
             </div>
           </div>
         </div>
@@ -71,10 +73,10 @@ function Home() {
         <div className="calc-step">
           <div className="step-number">2</div>
           <div className="step-content">
-            <div className="step-title">Calculate Pairwise Noise</div>
+            <div className="step-title">Exchange Public Keys</div>
             <div className="step-description">
-              For each other partner, deterministic noise is calculated using SHA-256 hash of both partner IDs + country + month. 
-              One partner adds the noise, the other subtracts it (determined by alphabetical order).
+              Partners register their public keys with the aggregator and retrieve others' public keys.
+              The aggregator facilitates this exchange but <strong>cannot derive the shared secrets</strong>.
             </div>
           </div>
         </div>
@@ -82,10 +84,10 @@ function Home() {
         <div className="calc-step">
           <div className="step-number">3</div>
           <div className="step-content">
-            <div className="step-title">Submit Masked Value</div>
+            <div className="step-title">Compute Shared Secrets</div>
             <div className="step-description">
-              The partner submits: <code>actual_value + Σ(pairwise_noise)</code> to the aggregator. 
-              The masked value hides the true value.
+              Each partner uses ECDH to compute shared secrets with every other partner.
+              Both partners derive the <strong>exact same secret</strong> — this is Diffie-Hellman magic!
             </div>
           </div>
         </div>
@@ -93,12 +95,40 @@ function Home() {
         <div className="calc-step">
           <div className="step-number">4</div>
           <div className="step-content">
-            <div className="step-title">Aggregate When Complete</div>
+            <div className="step-title">Generate HMAC-Based Noise</div>
             <div className="step-description">
-              When all partners submit, the aggregator sums all masked values. 
-              All noise terms cancel out: <code>Σ(masked) = Σ(actual)</code> ✅
+              Noise is computed as <code>HMAC-SHA256(shared_secret, country + month)</code>.
+              One partner adds, the other subtracts (determined by alphabetical order).
             </div>
           </div>
+        </div>
+
+        <div className="calc-step">
+          <div className="step-number">5</div>
+          <div className="step-content">
+            <div className="step-title">Submit & Aggregate</div>
+            <div className="step-description">
+              Partners submit masked values. When all submit, noise cancels perfectly: 
+              <code>Σ(masked) = Σ(actual)</code> ✅ The aggregator learns the total but NOT individual values.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: '2rem' }}>
+        <div className="card-header">
+          <span className="card-icon">🔒</span>
+          <h2 className="card-title">Security Guarantee</h2>
+        </div>
+        
+        <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '0.5rem', fontFamily: 'monospace', fontSize: '0.875rem', lineHeight: '1.6' }}>
+          <div style={{ color: '#a1a1aa', marginBottom: '0.5rem' }}>// The aggregator sees:</div>
+          <div>public_key_A = g<sup>private_a</sup></div>
+          <div>public_key_B = g<sup>private_b</sup></div>
+          <div style={{ color: '#a1a1aa', marginTop: '0.5rem', marginBottom: '0.5rem' }}>// Partners compute:</div>
+          <div style={{ color: '#4ade80' }}>shared_secret = g<sup>(private_a × private_b)</sup></div>
+          <div style={{ color: '#a1a1aa', marginTop: '0.5rem', marginBottom: '0.5rem' }}>// The aggregator CANNOT compute:</div>
+          <div style={{ color: '#f87171' }}>g<sup>(a×b)</sup> from g<sup>a</sup> and g<sup>b</sup> (Computational Diffie-Hellman Problem)</div>
         </div>
       </div>
 
@@ -144,6 +174,9 @@ function Home() {
             </tr>
           </tbody>
         </table>
+        <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(74, 222, 128, 0.1)', borderRadius: '0.5rem', fontSize: '0.875rem', color: '#86efac' }}>
+          🔐 The aggregator can verify the total is 1,700,000 but <strong>cannot determine</strong> that PartnerA contributed 1,000,000 — the noise was computed from shared secrets it doesn't have!
+        </div>
       </div>
     </div>
   )

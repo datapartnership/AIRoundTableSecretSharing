@@ -1,12 +1,26 @@
 /**
- * Deterministic noise generation - mirrors the C# implementation
- * Uses Web Crypto API for SHA-256 hashing
+ * Secure noise generation using HMAC-SHA256 with Diffie-Hellman shared secrets
+ * This mirrors the C# SecureNoiseGenerator implementation
  */
 
-async function sha256(message) {
+import { getSharedSecret } from './crypto';
+
+/**
+ * Compute HMAC-SHA256 using Web Crypto API
+ */
+async function hmacSha256(key, message) {
+  // Import the shared secret as an HMAC key
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    key,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
   const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  return new Uint8Array(hashBuffer);
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, msgBuffer);
+  return new Uint8Array(signature);
 }
 
 function bytesToLong(bytes) {
@@ -18,56 +32,45 @@ function bytesToLong(bytes) {
   return value;
 }
 
-// Simple seeded random number generator (matches .NET Random behavior approximately)
-function seededRandom(seed) {
-  // Use a simple LCG that matches behavior
-  let state = seed & 0x7FFFFFFF;
-  
-  return {
-    nextInt64(min, max) {
-      // Simple approach: generate multiple random values and combine
-      state = (state * 1103515245 + 12345) & 0x7FFFFFFF;
-      const r1 = state / 0x7FFFFFFF;
-      state = (state * 1103515245 + 12345) & 0x7FFFFFFF;
-      const r2 = state / 0x7FFFFFFF;
-      
-      const range = max - min;
-      const value = Math.floor(r1 * range) + min;
-      return value;
-    }
-  };
-}
-
 /**
- * Generates deterministic noise between two producers for a given context.
- * Both producers will generate the SAME noise value independently.
+ * Generates SECURE noise between two producers using their shared secret.
+ * The aggregator CANNOT compute this - it requires the shared secret from DH key exchange.
  */
-export async function generateNoise(producerId1, producerId2, country, month, maxNoise = 100_000_000) {
-  if (!producerId1 || !producerId2) {
+export async function generateSecureNoise(myProducerId, otherProducerId, country, month, maxNoise = 100_000_000) {
+  if (!myProducerId || !otherProducerId) {
     throw new Error('Producer IDs cannot be null or empty');
   }
   
-  if (producerId1 === producerId2) {
+  if (myProducerId === otherProducerId) {
     throw new Error('Cannot generate noise with self');
   }
   
-  // Create deterministic seed from inputs
-  // Order doesn't matter - sort alphabetically for consistency
-  const sortedIds = [producerId1, producerId2].sort();
-  const monthStr = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
-  const seedString = `${sortedIds[0]}|${sortedIds[1]}|${country}|${monthStr}`;
+  // Get the shared secret computed via Diffie-Hellman
+  const sharedSecret = getSharedSecret(myProducerId, otherProducerId);
+  if (!sharedSecret) {
+    throw new Error(`No shared secret with ${otherProducerId}. Complete key exchange first.`);
+  }
   
-  // Hash to create deterministic seed
-  const hashBytes = await sha256(seedString);
-  const seed = bytesToLong(hashBytes);
+  // Create context string (same as C# implementation)
+  const sortedIds = [myProducerId, otherProducerId].sort();
+  const monthStr = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, '0')}`;
+  const context = `${sortedIds[0]}|${sortedIds[1]}|${country}|${monthStr}`;
   
-  // Create random generator with deterministic seed
-  const random = seededRandom(Number(seed & BigInt(0x7FFFFFFF)));
+  // Compute HMAC-SHA256(sharedSecret, context)
+  const hash = await hmacSha256(sharedSecret, context);
   
-  // Generate noise in range [-maxNoise, maxNoise]
-  const noise = random.nextInt64(-maxNoise, maxNoise + 1);
+  // Convert to noise value (matching C# implementation)
+  const rawValue = bytesToLong(hash);
+  // Mask to positive value
+  const positiveValue = rawValue & BigInt('0x7FFFFFFFFFFFFFFF');
+  // Convert to range [-maxNoise, maxNoise]
+  const maxNoiseBig = BigInt(maxNoise);
+  const noise = Number((positiveValue % (BigInt(2) * maxNoiseBig)) - maxNoiseBig);
   
-  return noise;
+  // Sign: first partner alphabetically adds, second subtracts
+  const sign = myProducerId.localeCompare(otherProducerId) < 0 ? 1 : -1;
+  
+  return noise * sign;
 }
 
 /**
@@ -84,7 +87,8 @@ export function getNoiseSign(myProducerId, otherProducerId) {
 }
 
 /**
- * Calculate the total noise and masked value for a producer
+ * Calculate the total noise and masked value for a producer using SECURE noise
+ * Requires completed Diffie-Hellman key exchange with all other partners
  */
 export async function calculateMaskedValue(myProducerId, allProducerIds, country, month, actualValue) {
   const otherProducers = allProducerIds.filter(id => id !== myProducerId);
@@ -92,16 +96,15 @@ export async function calculateMaskedValue(myProducerId, allProducerIds, country
   let totalNoise = 0;
   
   // IMPORTANT: maxNoise must be the SAME for all partners to ensure cancellation!
-  // Using a fixed value that all partners agree on (e.g., configured by the aggregator)
   const maxNoise = 100_000_000;
   
   for (const otherProducerId of otherProducers) {
-    const noise = await generateNoise(myProducerId, otherProducerId, country, month, maxNoise);
-    const sign = getNoiseSign(myProducerId, otherProducerId);
-    const appliedNoise = noise * sign;
+    // This uses HMAC with the shared secret - aggregator CANNOT compute this!
+    const appliedNoise = await generateSecureNoise(myProducerId, otherProducerId, country, month, maxNoise);
+    const sign = appliedNoise >= 0 ? 1 : -1;
     
     noiseBreakdown[otherProducerId] = {
-      rawNoise: noise,
+      rawNoise: Math.abs(appliedNoise),
       sign: sign,
       appliedNoise: appliedNoise
     };
@@ -116,3 +119,4 @@ export async function calculateMaskedValue(myProducerId, allProducerIds, country
     noiseBreakdown
   };
 }
+

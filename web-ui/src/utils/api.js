@@ -41,3 +41,61 @@ export async function getAggregate(country, month) {
   if (!response.ok) throw new Error('Failed to fetch aggregate');
   return response.json();
 }
+
+// ==================== Key Exchange API ====================
+
+/**
+ * Register a partner's public key with the aggregator
+ */
+export async function registerPublicKey(partnerId, publicKeyBase64) {
+  const response = await fetch(`${API_BASE}/keyexchange/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      producerId: partnerId,
+      publicKeyBase64: publicKeyBase64
+    }),
+  });
+  
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || data.message || 'Failed to register public key');
+  }
+  
+  return response.json();
+}
+
+/**
+ * Get all registered public keys from the aggregator
+ */
+export async function getAllPublicKeys() {
+  const response = await fetch(`${API_BASE}/keyexchange/keys`);
+  if (!response.ok) throw new Error('Failed to fetch public keys');
+  const data = await response.json();
+  // API returns { partnerKeys: [...], totalPartners: n }
+  return data.partnerKeys || [];
+}
+
+/**
+ * Get a specific partner's public key
+ */
+export async function getPublicKey(partnerId) {
+  const response = await fetch(`${API_BASE}/keyexchange/keys/${encodeURIComponent(partnerId)}`);
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    throw new Error('Failed to fetch public key');
+  }
+  return response.json();
+}
+
+/**
+ * Get key exchange status from the aggregator
+ */
+export async function getKeyExchangeStatus() {
+  const response = await fetch(`${API_BASE}/keyexchange/status`);
+  if (!response.ok) throw new Error('Failed to fetch key exchange status');
+  return response.json();
+}
+

@@ -1,7 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { calculateMaskedValue } from '../utils/noise'
-import { getProducers, getEpoch, submitMetric } from '../utils/api'
+import { 
+  generateKeyPair, 
+  exportPublicKey, 
+  computeSharedSecret, 
+  hasKeyPair,
+  getKeyExchangeStatus as getLocalKeyStatus 
+} from '../utils/crypto'
+import { 
+  getProducers, 
+  getEpoch, 
+  submitMetric,
+  registerPublicKey,
+  getAllPublicKeys
+} from '../utils/api'
 
 const PARTNER_CONFIG = {
   partnerA: { name: 'Partner A', icon: '🏢', color: 'partner-a' },
@@ -28,6 +41,16 @@ function PartnerPage() {
   const [error, setError] = useState(null)
   const [producers, setProducers] = useState([])
   const [epoch, setEpoch] = useState(null)
+  
+  // Key exchange state
+  const [keyExchangeStatus, setKeyExchangeStatus] = useState({
+    hasOwnKeyPair: false,
+    isComplete: false,
+    completedExchanges: 0,
+    totalPartners: 0,
+    pendingPartners: []
+  })
+  const [keyExchangeLoading, setKeyExchangeLoading] = useState(false)
 
   // Fetch producers and epoch on mount
   useEffect(() => {
@@ -40,16 +63,68 @@ function PartnerPage() {
         setProducers(producersData)
         setEpoch(epochData)
       } catch (err) {
-        setError('Failed to connect to API. Make sure the backend is running on port 5000.')
+        setError('Failed to connect to API. Make sure the backend is running on port 5149.')
       }
     }
     fetchData()
   }, [])
 
-  // Calculate noise when inputs change
+  // Update key exchange status when producers change
+  const updateKeyExchangeStatus = useCallback(() => {
+    if (producers.length > 0) {
+      const producerIds = producers.map(p => p.producerId)
+      const status = getLocalKeyStatus(partnerId, producerIds)
+      setKeyExchangeStatus(status)
+    }
+  }, [partnerId, producers])
+
+  useEffect(() => {
+    updateKeyExchangeStatus()
+  }, [updateKeyExchangeStatus])
+
+  // Perform key exchange
+  const performKeyExchange = async () => {
+    setKeyExchangeLoading(true)
+    setError(null)
+    
+    try {
+      // Step 1: Generate our key pair if we don't have one
+      if (!hasKeyPair(partnerId)) {
+        await generateKeyPair(partnerId)
+      }
+      
+      // Step 2: Export and register our public key
+      const myPublicKey = await exportPublicKey(partnerId)
+      await registerPublicKey(partnerId, myPublicKey)
+      
+      // Step 3: Get all other partners' public keys
+      const allKeys = await getAllPublicKeys()
+      
+      // Step 4: Compute shared secrets with each partner
+      for (const keyInfo of allKeys) {
+        if (keyInfo.producerId !== partnerId && keyInfo.publicKeyBase64) {
+          try {
+            await computeSharedSecret(partnerId, keyInfo.producerId, keyInfo.publicKeyBase64)
+          } catch (e) {
+            console.warn(`Could not compute shared secret with ${keyInfo.producerId}:`, e)
+          }
+        }
+      }
+      
+      // Update status
+      updateKeyExchangeStatus()
+      
+    } catch (err) {
+      setError(`Key exchange failed: ${err.message}`)
+    } finally {
+      setKeyExchangeLoading(false)
+    }
+  }
+
+  // Calculate noise when inputs change (only if key exchange is complete)
   useEffect(() => {
     async function calculate() {
-      if (!actualValue || !producers.length) {
+      if (!actualValue || !producers.length || !keyExchangeStatus.isComplete) {
         setCalculation(null)
         return
       }
@@ -80,7 +155,7 @@ function PartnerPage() {
     }
     
     calculate()
-  }, [actualValue, country, month, partnerId, producers])
+  }, [actualValue, country, month, partnerId, producers, keyExchangeStatus.isComplete])
 
   const handleSubmit = async () => {
     if (!calculation || !epoch) return
@@ -190,22 +265,65 @@ function PartnerPage() {
               ({epoch.producerIds?.join(', ')})
             </div>
           )}
+
+          {/* Key Exchange Status */}
+          <div className="card" style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span>🔑</span>
+              <strong>Diffie-Hellman Key Exchange</strong>
+            </div>
+            
+            {keyExchangeStatus.isComplete ? (
+              <div className="status-badge success" style={{ marginBottom: '0.5rem' }}>
+                ✅ Key exchange complete with {keyExchangeStatus.completedExchanges} partner(s)
+              </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: '0.5rem', fontSize: '0.875rem', color: '#a1a1aa' }}>
+                  {keyExchangeStatus.hasOwnKeyPair 
+                    ? `Key pair generated. Exchanged with ${keyExchangeStatus.completedExchanges}/${keyExchangeStatus.totalPartners} partners.`
+                    : 'Generate your ECDH key pair and exchange with other partners.'}
+                </div>
+                {keyExchangeStatus.pendingPartners.length > 0 && (
+                  <div style={{ marginBottom: '0.5rem', fontSize: '0.75rem', color: '#71717a' }}>
+                    Pending: {keyExchangeStatus.pendingPartners.join(', ')}
+                  </div>
+                )}
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={performKeyExchange}
+                  disabled={keyExchangeLoading || submitted}
+                  style={{ marginTop: '0.5rem' }}
+                >
+                  {keyExchangeLoading ? '⏳ Exchanging Keys...' : '🔐 Perform Key Exchange'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Calculation Card */}
         <div className="card">
           <div className="card-header">
             <span className="card-icon">🔐</span>
-            <h2 className="card-title">Noise Calculation</h2>
+            <h2 className="card-title">Secure Noise Calculation</h2>
           </div>
 
-          {!actualValue ? (
+          {!keyExchangeStatus.isComplete ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#71717a' }}>
-              Enter an actual value to see the noise calculation
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔑</div>
+              <div>Complete key exchange first to enable secure noise calculation</div>
+              <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', color: '#52525b' }}>
+                The Diffie-Hellman key exchange establishes shared secrets that the aggregator cannot compute.
+              </div>
+            </div>
+          ) : !actualValue ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: '#71717a' }}>
+              Enter an actual value to see the secure noise calculation
             </div>
           ) : loading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#71717a' }}>
-              Calculating noise...
+              Calculating secure noise...
             </div>
           ) : calculation ? (
             <>
@@ -271,16 +389,16 @@ function PartnerPage() {
       <div className="card">
         <div className="card-header">
           <span className="card-icon">💡</span>
-          <h2 className="card-title">How Your Privacy is Protected</h2>
+          <h2 className="card-title">How Your Privacy is Protected (Secure DH Implementation)</h2>
         </div>
         
         <div className="calc-step">
           <div className="step-number">1</div>
           <div className="step-content">
-            <div className="step-title">Deterministic Noise Generation</div>
+            <div className="step-title">ECDH Key Pair Generation</div>
             <div className="step-description">
-              For each other partner, we calculate a noise value using SHA-256 hash of both partner IDs + country + month.
-              This means both partners calculate the <strong>exact same noise</strong> independently — no communication needed!
+              Each partner generates an <strong>Elliptic Curve Diffie-Hellman (P-256)</strong> key pair.
+              The private key <strong>never leaves your browser</strong> — only the public key is shared.
             </div>
           </div>
         </div>
@@ -288,10 +406,10 @@ function PartnerPage() {
         <div className="calc-step">
           <div className="step-number">2</div>
           <div className="step-content">
-            <div className="step-title">Alphabetical Sign Assignment</div>
+            <div className="step-title">Key Exchange via Aggregator</div>
             <div className="step-description">
-              The partner that comes first alphabetically <strong>adds</strong> the noise, the other <strong>subtracts</strong> it.
-              This ensures perfect cancellation when aggregating.
+              Partners exchange public keys through the aggregator. The aggregator sees the public keys but
+              <strong> cannot compute the shared secrets</strong> — this is the magic of Diffie-Hellman!
             </div>
           </div>
         </div>
@@ -299,10 +417,33 @@ function PartnerPage() {
         <div className="calc-step">
           <div className="step-number">3</div>
           <div className="step-content">
-            <div className="step-title">Your Value is Hidden</div>
+            <div className="step-title">Shared Secret Derivation</div>
             <div className="step-description">
-              The aggregator only sees your masked value. They cannot determine your actual value without 
-              knowing the noise — which is computed from private partner relationships.
+              Each partner computes shared secrets with every other partner using <strong>ECDH key agreement</strong>.
+              Both partners derive the <strong>exact same secret</strong> independently — the aggregator cannot!
+            </div>
+          </div>
+        </div>
+
+        <div className="calc-step">
+          <div className="step-number">4</div>
+          <div className="step-content">
+            <div className="step-title">HMAC-Based Noise Generation</div>
+            <div className="step-description">
+              Noise is computed as <code>HMAC-SHA256(shared_secret, context)</code>. Since the aggregator
+              doesn't have the shared secrets, it <strong>cannot compute the noise</strong> and therefore
+              cannot reverse engineer your actual value!
+            </div>
+          </div>
+        </div>
+
+        <div className="calc-step">
+          <div className="step-number">5</div>
+          <div className="step-content">
+            <div className="step-title">Perfect Noise Cancellation</div>
+            <div className="step-description">
+              One partner adds the noise, the other subtracts it. When aggregated, all noise cancels
+              perfectly — revealing only the true total, while individual values remain <strong>cryptographically protected</strong>.
             </div>
           </div>
         </div>
