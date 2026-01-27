@@ -21,6 +21,7 @@ builder.Services.AddCors(options =>
 
 // In-memory storage for demo (use database in production)
 builder.Services.AddSingleton<InMemoryDataStore>();
+builder.Services.AddSingleton<KeyStore>();
 
 var app = builder.Build();
 
