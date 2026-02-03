@@ -126,17 +126,40 @@ function Results() {
 
           {result.status === 'complete' ? (
             <>
-              <div className="summary-box" style={{ marginBottom: '1.5rem' }}>
-                <div className="summary-label">Aggregated Total (Noise Canceled!)</div>
-                <div className="summary-value" style={{ color: '#4ade80' }}>
-                  {formatNumber(result.total)}
+              <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
+                <div className="summary-box">
+                  <div className="summary-label">📊 Aggregated MAU Total</div>
+                  <div className="summary-value" style={{ color: '#4ade80' }}>
+                    {formatNumber(result.total)}
+                  </div>
                 </div>
+
+                {result.weightedTotal !== null && result.weightedTotal !== undefined && (
+                  <div className="summary-box" style={{ background: 'rgba(139, 92, 246, 0.1)', borderColor: 'rgba(139, 92, 246, 0.3)' }}>
+                    <div className="summary-label">⚖️ Aggregated Weighted MAU</div>
+                    <div className="summary-value" style={{ color: '#a78bfa' }}>
+                      {formatNumber(result.weightedTotal)}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {result.weightedRatio !== null && result.weightedRatio !== undefined && (
+                <div className="summary-box" style={{ marginBottom: '1.5rem', background: 'rgba(251, 191, 36, 0.1)', borderColor: 'rgba(251, 191, 36, 0.3)' }}>
+                  <div className="summary-label">📈 Weighted Ratio (TotalWeightedMAU / TotalMAU)</div>
+                  <div className="summary-value" style={{ color: '#fbbf24' }}>
+                    {result.weightedRatio.toFixed(4)}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#a1a1aa', marginTop: '0.5rem' }}>
+                    = {formatNumber(result.weightedTotal)} / {formatNumber(result.total)}
+                  </div>
+                </div>
+              )}
 
               <div className="info-box" style={{ background: 'rgba(74, 222, 128, 0.1)', borderColor: 'rgba(74, 222, 128, 0.3)', color: '#86efac' }}>
                 <span className="info-box-icon">✨</span>
-                All {result.submissionCount} partners have submitted. The noise has perfectly canceled out, 
-                revealing only the true aggregate total — individual values remain private!
+                All {result.submissionCount} partners have submitted. The noise has perfectly canceled out for {result.weightedTotal !== null && result.weightedTotal !== undefined ? 'both metrics' : 'the MAU metric'}, 
+                revealing only the true aggregate total{result.weightedTotal !== null && result.weightedTotal !== undefined ? 's' : ''} — individual values {result.weightedTotal !== null && result.weightedTotal !== undefined ? 'and coefficients ' : ''}remain private!
               </div>
             </>
           ) : (

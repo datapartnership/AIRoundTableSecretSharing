@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { calculateMaskedValue } from '../utils/noise'
+import { calculateDualMaskedValues } from '../utils/noise'
 import { 
   generateKeyPair, 
   exportPublicKey, 
@@ -34,6 +34,7 @@ function PartnerPage() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
   const [actualValue, setActualValue] = useState('')
+  const [coefficient, setCoefficient] = useState('')
   const [calculation, setCalculation] = useState(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -138,12 +139,16 @@ function PartnerPage() {
         const monthDate = new Date(Date.UTC(year, monthNum - 1, 1))
         const producerIds = producers.map(p => p.producerId)
         
-        const result = await calculateMaskedValue(
+        // Parse coefficient if provided
+        const coefficientValue = coefficient ? parseFloat(coefficient) : null
+        
+        const result = await calculateDualMaskedValues(
           partnerId,
           producerIds,
           country,
           monthDate,
-          parseInt(actualValue)
+          parseInt(actualValue),
+          coefficientValue
         )
         
         setCalculation(result)
@@ -155,7 +160,7 @@ function PartnerPage() {
     }
     
     calculate()
-  }, [actualValue, country, month, partnerId, producers, keyExchangeStatus.isComplete])
+  }, [actualValue, coefficient, country, month, partnerId, producers, keyExchangeStatus.isComplete])
 
   const handleSubmit = async () => {
     if (!calculation || !epoch) return
@@ -172,7 +177,8 @@ function PartnerPage() {
         producerId: partnerId,
         country: country,
         month: monthDate.toISOString(),
-        value: calculation.maskedValue,
+        value: calculation.mau.maskedValue,
+        weightedValue: calculation.weightedMau ? calculation.weightedMau.maskedValue : null,
         epochId: epoch.epochId,
         signature: 'demo-signature'
       })
@@ -187,6 +193,7 @@ function PartnerPage() {
 
   const handleReset = () => {
     setActualValue('')
+    setCoefficient('')
     setCalculation(null)
     setSubmitted(false)
     setError(null)
@@ -258,6 +265,29 @@ function PartnerPage() {
             />
           </div>
 
+          <div className="form-group">
+            <label className="form-label">
+              Coefficient (Optional - for Weighted MAU)
+              <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
+                Your secret multiplier
+              </span>
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              className="form-input"
+              placeholder="e.g., 1.5"
+              value={coefficient}
+              onChange={(e) => setCoefficient(e.target.value)}
+              disabled={submitted}
+            />
+            {coefficient && actualValue && (
+              <div style={{ fontSize: '0.875rem', color: '#a1a1aa', marginTop: '0.5rem' }}>
+                Weighted MAU = {parseInt(actualValue).toLocaleString()} × {parseFloat(coefficient)} = {Math.round(parseInt(actualValue) * parseFloat(coefficient)).toLocaleString()}
+              </div>
+            )}
+          </div>
+
           {epoch && (
             <div className="info-box">
               <span className="info-box-icon">ℹ️</span>
@@ -327,38 +357,85 @@ function PartnerPage() {
             </div>
           ) : calculation ? (
             <>
-              <div className="noise-breakdown">
-                <div className="noise-item">
-                  <span className="noise-label">Your Actual Value</span>
-                  <span className="noise-value">{formatNumber(calculation.actualValue)}</span>
-                </div>
-                
-                {Object.entries(calculation.noiseBreakdown).map(([otherId, data]) => (
-                  <div key={otherId} className="noise-item">
-                    <span className="noise-label">
-                      Noise with <strong>{otherId}</strong>
-                      <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
-                        ({data.sign > 0 ? 'add' : 'subtract'})
+              {/* MAU Calculation */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: '#10b981' }}>
+                  📊 MAU (Monthly Active Users)
+                </h3>
+                <div className="noise-breakdown">
+                  <div className="noise-item">
+                    <span className="noise-label">Your Actual MAU</span>
+                    <span className="noise-value">{formatNumber(calculation.mau.actualValue)}</span>
+                  </div>
+                  
+                  {Object.entries(calculation.mau.noiseBreakdown).map(([otherId, data]) => (
+                    <div key={otherId} className="noise-item">
+                      <span className="noise-label">
+                        Noise with <strong>{otherId}</strong>
+                        <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
+                          ({data.sign > 0 ? 'add' : 'subtract'})
+                        </span>
                       </span>
-                    </span>
-                    <span className={`noise-value ${data.appliedNoise >= 0 ? 'positive' : 'negative'}`}>
-                      {data.appliedNoise >= 0 ? '+' : ''}{formatNumber(data.appliedNoise)}
+                      <span className={`noise-value ${data.appliedNoise >= 0 ? 'positive' : 'negative'}`}>
+                        {data.appliedNoise >= 0 ? '+' : ''}{formatNumber(data.appliedNoise)}
+                      </span>
+                    </div>
+                  ))}
+                  
+                  <div className="noise-item" style={{ borderTop: '2px solid rgba(255,255,255,0.1)', marginTop: '0.5rem', paddingTop: '1rem' }}>
+                    <span className="noise-label"><strong>Total MAU Noise</strong></span>
+                    <span className={`noise-value ${calculation.mau.totalNoise >= 0 ? 'positive' : 'negative'}`}>
+                      {calculation.mau.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.mau.totalNoise)}
                     </span>
                   </div>
-                ))}
-                
-                <div className="noise-item" style={{ borderTop: '2px solid rgba(255,255,255,0.1)', marginTop: '0.5rem', paddingTop: '1rem' }}>
-                  <span className="noise-label"><strong>Total Noise</strong></span>
-                  <span className={`noise-value ${calculation.totalNoise >= 0 ? 'positive' : 'negative'}`}>
-                    {calculation.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.totalNoise)}
-                  </span>
+                </div>
+
+                <div className="summary-box" style={{ marginTop: '1rem' }}>
+                  <div className="summary-label">Masked MAU to Submit</div>
+                  <div className="summary-value">{formatNumber(calculation.mau.maskedValue)}</div>
                 </div>
               </div>
 
-              <div className="summary-box" style={{ marginTop: '1rem' }}>
-                <div className="summary-label">Masked Value to Submit</div>
-                <div className="summary-value">{formatNumber(calculation.maskedValue)}</div>
-              </div>
+              {/* Weighted MAU Calculation (if coefficient provided) */}
+              {calculation.weightedMau && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: '#8b5cf6' }}>
+                    ⚖️ Weighted MAU (MAU × {calculation.coefficient})
+                  </h3>
+                  <div className="noise-breakdown">
+                    <div className="noise-item">
+                      <span className="noise-label">Your Actual Weighted MAU</span>
+                      <span className="noise-value">{formatNumber(calculation.weightedMau.actualValue)}</span>
+                    </div>
+                    
+                    {Object.entries(calculation.weightedMau.noiseBreakdown).map(([otherId, data]) => (
+                      <div key={`weighted-${otherId}`} className="noise-item">
+                        <span className="noise-label">
+                          Noise with <strong>{otherId}</strong>
+                          <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
+                            ({data.sign > 0 ? 'add' : 'subtract'})
+                          </span>
+                        </span>
+                        <span className={`noise-value ${data.appliedNoise >= 0 ? 'positive' : 'negative'}`}>
+                          {data.appliedNoise >= 0 ? '+' : ''}{formatNumber(data.appliedNoise)}
+                        </span>
+                      </div>
+                    ))}
+                    
+                    <div className="noise-item" style={{ borderTop: '2px solid rgba(255,255,255,0.1)', marginTop: '0.5rem', paddingTop: '1rem' }}>
+                      <span className="noise-label"><strong>Total Weighted Noise</strong></span>
+                      <span className={`noise-value ${calculation.weightedMau.totalNoise >= 0 ? 'positive' : 'negative'}`}>
+                        {calculation.weightedMau.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.weightedMau.totalNoise)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="summary-box" style={{ marginTop: '1rem', background: 'rgba(139, 92, 246, 0.1)', borderColor: 'rgba(139, 92, 246, 0.3)' }}>
+                    <div className="summary-label">Masked Weighted MAU to Submit</div>
+                    <div className="summary-value">{formatNumber(calculation.weightedMau.maskedValue)}</div>
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginTop: '1rem', textAlign: 'center' }}>
                 {submitted ? (

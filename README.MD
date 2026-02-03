@@ -12,6 +12,29 @@ Imagine a scenario where the World Bank wants to collect monthly active user sta
 - ✅ Partners do **not communicate** directly with each other
 - ✅ No pre-shared secrets required between partners
 
+## ⚖️ Dual Metric Support
+
+This implementation supports **two parallel masked metrics** submitted simultaneously:
+
+| Metric | Description | Use Case |
+|--------|-------------|----------|
+| **MAU** | Monthly Active Users (raw count) | Basic user count |
+| **Adjusted MAU** | MAU × partner-specific coefficient | Quality-adjusted users, engagement score, etc. |
+
+Each partner multiplies their MAU by a **secret coefficient** before masking. The coefficient is **never revealed** to the aggregator.
+
+### Derived Metrics
+
+The aggregator can compute:
+
+| Metric | Formula | Meaning |
+|--------|---------|---------|
+| **Total MAU** | Σ(MAU_i) | Sum of all partners' MAU |
+| **Total Adjusted MAU** | Σ(MAU_i × coef_i) | Sum of adjusted values |
+| **Weighted Ratio** | TotalAdjustedMAU / TotalMAU | Aggregate weighted coefficient |
+
+The **Weighted Ratio** represents the MAU-weighted average of all partners' coefficients — useful for computing aggregate quality scores without revealing individual coefficients.
+
 ## 🔐 The Secure Pairwise Noise Cancellation Protocol
 
 ### Core Idea
@@ -38,8 +61,9 @@ The critical insight is that the aggregator facilitates the key exchange but **c
 │  Aggregator sees:     public_a, public_b                                   │
 │  Aggregator CANNOT compute: g^(a*b) (Computational Diffie-Hellman problem) │
 │                                                                             │
-│  Noise = HMAC-SHA256(shared_AB, country || month)                          │
+│  Noise = HMAC-SHA256(shared_AB, country || month || metricType)            │
 │  → Only partners can compute this, not the aggregator!                     │
+│  → Different metricType generates different noise for MAU vs AdjustedMAU   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,23 +112,23 @@ byte[] sharedSecret_AB = myPrivateKey.DeriveKeyMaterial(partnerA_PublicKey);
 
 #### Step 4: Generate Noise from Shared Secrets
 
-Noise is computed using HMAC-SHA256 with the shared secret as the key:
+Noise is computed using HMAC-SHA256 with the shared secret as the key. Each metric type generates **independent noise**:
 
 ```csharp
 // SecureNoiseGenerator.cs
-public static long GenerateNoise(byte[] sharedSecret, string id1, string id2, 
-                                  string country, DateTime month, long maxNoise)
+public enum MetricType { MAU, WeightedMAU }
+
+public static long GenerateNoise(byte[] sharedSecret, string country, 
+                                  DateTime month, MetricType metricType, long maxNoise)
 {
-    var sortedIds = new[] { id1, id2 }.OrderBy(x => x).ToArray();
-    var context = $"{sortedIds[0]}|{sortedIds[1]}|{country}|{month:yyyy-MM}";
+    // Include metricType in context to generate different noise per metric
+    var context = $"{country}|{month:yyyy-MM}|{metricType}";
     
     using var hmac = new HMACSHA256(sharedSecret);
     var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(context));
     
     long value = BitConverter.ToInt64(hash, 0) & 0x7FFFFFFFFFFFFFFF;
-    long noise = (long)(value % (ulong)(2 * maxNoise)) - maxNoise;
-    
-    return String.CompareOrdinal(id1, id2) < 0 ? noise : -noise;
+    return (long)(value % (ulong)(2 * maxNoise)) - maxNoise;
 }
 ```
 
@@ -112,18 +136,22 @@ public static long GenerateNoise(byte[] sharedSecret, string id1, string id2,
 
 #### Step 5: Submit Masked Values
 
-Each partner calculates their total noise and submits:
+Each partner calculates noise for **both metrics** and submits:
 
 ```
-masked_value = actual_value + Σ(noise_with_each_partner)
+masked_MAU = actual_MAU + Σ(MAU_noise_with_each_partner)
+masked_AdjustedMAU = actual_MAU × coefficient + Σ(adjusted_noise_with_each_partner)
 ```
 
 #### Step 6: Aggregation
 
-The aggregator sums all masked values. Noise cancels perfectly:
+The aggregator sums all masked values. Noise cancels perfectly for **each metric independently**:
 
 ```
-Σ(masked_values) = Σ(actual_values) + 0 = true total ✓
+Σ(masked_MAU) = Σ(actual_MAU) + 0 = TotalMAU ✓
+Σ(masked_AdjustedMAU) = Σ(actual_AdjustedMAU) + 0 = TotalAdjustedMAU ✓
+
+WeightedRatio = TotalAdjustedMAU / TotalMAU
 ```
 
 ### Mathematical Proof (3 Partners)
@@ -152,12 +180,30 @@ Each partner submits:
 
 ### Numerical Example
 
-| Partner | Actual Value | Noise Applied | Masked Value |
-|---------|--------------|---------------|--------------|
+#### Single Metric (MAU)
+
+| Partner | Actual MAU | Noise Applied | Masked MAU |
+|---------|------------|---------------|------------|
 | PartnerA | 1,000,000 | +150,000 (with B) +80,000 (with C) | 1,230,000 |
 | PartnerB | 500,000 | -150,000 (with A) +45,000 (with C) | 395,000 |
 | PartnerC | 200,000 | -80,000 (with A) -45,000 (with B) | 75,000 |
 | **Total** | **1,700,000** | **0** | **1,700,000** ✓ |
+
+#### Dual Metrics (MAU + Adjusted MAU)
+
+| Partner | MAU | Coefficient | Adjusted MAU | Masked MAU | Masked Adjusted |
+|---------|-----|-------------|--------------|------------|-----------------|
+| PartnerA | 1,000,000 | 1.5 | 1,500,000 | 1,230,000 | 1,620,000 |
+| PartnerB | 500,000 | 2.0 | 1,000,000 | 395,000 | 880,000 |
+| PartnerC | 200,000 | 0.8 | 160,000 | 75,000 | 160,000 |
+| **Total** | **1,700,000** | — | **2,660,000** | **1,700,000** ✓ | **2,660,000** ✓ |
+
+**Aggregator computes:**
+- Total MAU: 1,700,000
+- Total Adjusted MAU: 2,660,000  
+- **Weighted Ratio**: 2,660,000 / 1,700,000 = **1.5647**
+
+The aggregator learns the aggregate weighted coefficient (1.5647) but **cannot determine** individual MAU values or that PartnerB used coefficient 2.0!
 
 ## 🏗️ Project Structure
 
@@ -179,15 +225,18 @@ AIRoundTableSecretSharing/
 ├── AIRoundTableSecretSharingCommon/       # Shared library
 │   ├── Core/
 │   │   ├── DiffieHellmanKeyExchange.cs    # ECDH P-256 key pair generation
-│   │   └── SecureNoiseGenerator.cs        # HMAC-based noise from shared secrets
+│   │   ├── SecureNoiseGenerator.cs        # HMAC-based noise from shared secrets (with MetricType)
+│   │   └── DeterministicNoiseGenerator.cs # Simple hash-based noise (demo only)
 │   ├── Models/
-│   │   ├── MetricSubmission.cs            # Submission data structure
-│   │   ├── AggregationResult.cs           # Aggregation response
+│   │   ├── MetricSubmission.cs            # Submission with Value + WeightedValue
+│   │   ├── AggregationResult.cs           # Total, WeightedTotal, WeightedRatio
+│   │   ├── SubmissionResult.cs            # Dual metric submission result
 │   │   ├── ProducerInfo.cs                # Partner information
 │   │   ├── ProducerEpoch.cs               # Partner set for a time period
 │   │   └── PartnerPublicKey.cs            # DH public key model
 │   └── Producers/
-│       └── SecureProducerClient.cs        # Secure client with DH key exchange
+│       ├── SecureProducerClient.cs        # Secure client with dual metric support
+│       └── ProducerClient.cs              # Basic client (demo only)
 │
 ├── AIRoundTableSecretSharingSecureDemo/   # Console demo with full DH exchange
 │   └── Program.cs                         # Interactive secure aggregation demo
@@ -231,14 +280,16 @@ public class DiffieHellmanKeyExchange : IDisposable
 
 ### SecureNoiseGenerator.cs
 
-Generates noise from shared secrets using HMAC-SHA256:
+Generates noise from shared secrets using HMAC-SHA256. Supports multiple metric types:
 
 ```csharp
-public static long GenerateNoise(byte[] sharedSecret, string id1, string id2,
-                                  string country, DateTime month, long maxNoise)
+public enum MetricType { MAU, WeightedMAU }
+
+public static long GenerateNoise(byte[] sharedSecret, string country, DateTime month,
+                                  MetricType metricType, long maxNoise)
 {
-    var sortedIds = new[] { id1, id2 }.OrderBy(x => x).ToArray();
-    var context = $"{sortedIds[0]}|{sortedIds[1]}|{country}|{month:yyyy-MM}";
+    // Include metricType to generate independent noise for each metric
+    var context = $"{country}|{month:yyyy-MM}|{metricType}";
     
     using var hmac = new HMACSHA256(sharedSecret);
     var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(context));
@@ -246,8 +297,13 @@ public static long GenerateNoise(byte[] sharedSecret, string id1, string id2,
     long value = BitConverter.ToInt64(hash, 0) & 0x7FFFFFFFFFFFFFFF;
     long noise = (long)(value % (ulong)(2 * maxNoise)) - maxNoise;
     
+    return noise;
+}
+
+public static int GetNoiseSign(string myId, string otherId)
+{
     // First partner alphabetically adds noise, second subtracts
-    return String.CompareOrdinal(id1, id2) < 0 ? noise : -noise;
+    return String.CompareOrdinal(myId, otherId) < 0 ? 1 : -1;
 }
 ```
 

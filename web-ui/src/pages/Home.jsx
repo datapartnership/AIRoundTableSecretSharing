@@ -97,8 +97,9 @@ function Home() {
           <div className="step-content">
             <div className="step-title">Generate HMAC-Based Noise</div>
             <div className="step-description">
-              Noise is computed as <code>HMAC-SHA256(shared_secret, country + month)</code>.
+              Noise is computed as <code>HMAC-SHA256(shared_secret, country + month + metricType)</code>.
               One partner adds, the other subtracts (determined by alphabetical order).
+              <strong> Each metric type generates independent noise!</strong>
             </div>
           </div>
         </div>
@@ -108,10 +109,43 @@ function Home() {
           <div className="step-content">
             <div className="step-title">Submit & Aggregate</div>
             <div className="step-description">
-              Partners submit masked values. When all submit, noise cancels perfectly: 
-              <code>Σ(masked) = Σ(actual)</code> ✅ The aggregator learns the total but NOT individual values.
+              Partners submit masked values for both metrics (MAU and Adjusted MAU). When all submit, noise cancels perfectly: 
+              <code>Σ(masked) = Σ(actual)</code> ✅ The aggregator learns the totals but NOT individual values or coefficients.
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Dual Metrics Card */}
+      <div className="card" style={{ marginTop: '2rem' }}>
+        <div className="card-header">
+          <span className="card-icon">⚖️</span>
+          <h2 className="card-title">Dual Metric Support</h2>
+        </div>
+        
+        <div className="info-box" style={{ marginBottom: '1rem' }}>
+          <span className="info-box-icon">🎯</span>
+          Partners can now submit <strong>two parallel masked metrics</strong>:
+        </div>
+
+        <div className="grid-2">
+          <div style={{ padding: '1rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '0.5rem', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#10b981' }}>📊 MAU (Monthly Active Users)</div>
+            <div style={{ fontSize: '0.875rem', color: '#a1a1aa' }}>
+              Raw count of monthly active users. Masked with noise generated from <code>metricType = "MAU"</code>.
+            </div>
+          </div>
+
+          <div style={{ padding: '1rem', background: 'rgba(139, 92, 246, 0.1)', borderRadius: '0.5rem', border: '1px solid rgba(139, 92, 246, 0.3)' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#8b5cf6' }}>⚖️ Adjusted MAU (MAU × Coefficient)</div>
+            <div style={{ fontSize: '0.875rem', color: '#a1a1aa' }}>
+              Partners multiply their MAU by a <strong>secret coefficient</strong> (e.g., quality factor). The coefficient is never revealed!
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(139, 92, 246, 0.1)', borderRadius: '0.5rem', fontSize: '0.875rem', color: '#c4b5fd' }}>
+          🔒 The aggregator learns <strong>Σ(MAU)</strong> and <strong>Σ(Adjusted MAU)</strong> but cannot determine individual MAU values or any partner's coefficient!
         </div>
       </div>
 
@@ -135,47 +169,66 @@ function Home() {
       <div className="card" style={{ marginTop: '2rem' }}>
         <div className="card-header">
           <span className="card-icon">🧮</span>
-          <h2 className="card-title">Example Calculation</h2>
+          <h2 className="card-title">Example Dual Metric Calculation</h2>
         </div>
         
         <table className="results-table">
           <thead>
             <tr>
               <th>Partner</th>
-              <th>Actual Value</th>
-              <th>Noise Applied</th>
-              <th>Masked Value</th>
+              <th>MAU</th>
+              <th>Coefficient</th>
+              <th>Adjusted MAU</th>
+              <th>Masked MAU</th>
+              <th>Masked Adjusted</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td><span className="partner-badge partner-a">PartnerA</span></td>
               <td>1,000,000</td>
-              <td style={{ color: '#4ade80' }}>+150,000</td>
+              <td style={{ color: '#8b5cf6' }}>1.5</td>
+              <td>1,500,000</td>
               <td>1,150,000</td>
+              <td>1,620,000</td>
             </tr>
             <tr>
               <td><span className="partner-badge partner-b">PartnerB</span></td>
               <td>500,000</td>
-              <td style={{ color: '#f87171' }}>-80,000</td>
+              <td style={{ color: '#8b5cf6' }}>2.0</td>
+              <td>1,000,000</td>
               <td>420,000</td>
+              <td>880,000</td>
             </tr>
             <tr>
               <td><span className="partner-badge partner-c">PartnerC</span></td>
               <td>200,000</td>
-              <td style={{ color: '#f87171' }}>-70,000</td>
+              <td style={{ color: '#8b5cf6' }}>0.8</td>
+              <td>160,000</td>
               <td>130,000</td>
+              <td>160,000</td>
             </tr>
             <tr style={{ fontWeight: 'bold', borderTop: '2px solid rgba(255,255,255,0.2)' }}>
               <td>Total</td>
               <td>1,700,000</td>
-              <td style={{ color: '#a1a1aa' }}>0 (canceled!)</td>
+              <td style={{ color: '#71717a' }}>—</td>
+              <td>2,660,000</td>
               <td>1,700,000 ✅</td>
+              <td>2,660,000 ✅</td>
             </tr>
           </tbody>
         </table>
         <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(74, 222, 128, 0.1)', borderRadius: '0.5rem', fontSize: '0.875rem', color: '#86efac' }}>
-          🔐 The aggregator can verify the total is 1,700,000 but <strong>cannot determine</strong> that PartnerA contributed 1,000,000 — the noise was computed from shared secrets it doesn't have!
+          <div>🔐 <strong>Aggregator learns:</strong></div>
+          <ul style={{ margin: '0.5rem 0 0 1.5rem', lineHeight: '1.8' }}>
+            <li>Total MAU = <strong>1,700,000</strong></li>
+            <li>Total Adjusted MAU = <strong>2,660,000</strong></li>
+            <li>Weighted Ratio = 2,660,000 / 1,700,000 = <strong style={{ color: '#fbbf24' }}>1.5647</strong></li>
+          </ul>
+          <div style={{ marginTop: '0.5rem' }}>
+            The <strong>Weighted Ratio</strong> represents the aggregate weighted coefficient — useful for computing 
+            quality scores without revealing individual coefficients!
+          </div>
         </div>
       </div>
     </div>
