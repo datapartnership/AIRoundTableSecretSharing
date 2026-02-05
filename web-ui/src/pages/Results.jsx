@@ -136,7 +136,7 @@ function Results() {
 
                 {result.weightedTotal !== null && result.weightedTotal !== undefined && (
                   <div className="summary-box" style={{ background: 'rgba(139, 92, 246, 0.1)', borderColor: 'rgba(139, 92, 246, 0.3)' }}>
-                    <div className="summary-label">⚖️ Aggregated Weighted MAU</div>
+                    <div className="summary-label">⚖️ Aggregated Adjusted MAU</div>
                     <div className="summary-value" style={{ color: '#a78bfa' }}>
                       {formatNumber(result.weightedTotal)}
                     </div>
