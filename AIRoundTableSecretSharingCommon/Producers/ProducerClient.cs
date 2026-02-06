@@ -30,10 +30,10 @@ public class ProducerClient
         Console.WriteLine($"Actual Value: {actualValue:N0}");
         Console.WriteLine();
         
-        // Step 1: Get producer list from World Bank (NO COMMUNICATION WITH OTHER PRODUCERS!)
+        // Step 1: Get producer list from Development Data Partnership (NO COMMUNICATION WITH OTHER PRODUCERS!)
         var monthStart = new DateTime(month.Year, month.Month, 1);
         
-        Console.WriteLine("Step 1: Fetching producer list from World Bank API...");
+        Console.WriteLine("Step 1: Fetching producer list from Development Data Partnership API...");
         var producersResponse = await _httpClient.GetAsync(
             $"/api/registry/producers?effectiveDate={monthStart:yyyy-MM-dd}");
         
@@ -108,8 +108,8 @@ public class ProducerClient
         Console.WriteLine($"Masked value to submit: {maskedValue:N0}");
         Console.WriteLine();
         
-        // Step 4: Submit to World Bank
-        Console.WriteLine("Step 4: Submitting masked value to World Bank...");
+        // Step 4: Submit to Development Data Partnership
+        Console.WriteLine("Step 4: Submitting masked value to Development Data Partnership...");
         
         var submission = new MetricSubmission
         {

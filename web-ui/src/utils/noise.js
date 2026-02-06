@@ -6,14 +6,6 @@
 import { getSharedSecret } from './crypto';
 
 /**
- * Metric types for noise generation. Each metric type generates independent noise.
- */
-export const MetricType = {
-  MAU: 'MAU',
-  WeightedMAU: 'WeightedMAU'
-};
-
-/**
  * Compute HMAC-SHA256 using Web Crypto API
  */
 async function hmacSha256(key, message) {
@@ -44,7 +36,7 @@ function bytesToLong(bytes) {
  * Generates SECURE noise between two producers using their shared secret.
  * The aggregator CANNOT compute this - it requires the shared secret from DH key exchange.
  */
-export async function generateSecureNoise(myProducerId, otherProducerId, country, month, metricType = MetricType.MAU, maxNoise = 100_000_000) {
+export async function generateSecureNoise(myProducerId, otherProducerId, country, month, maxNoise = 100_000_000) {
   if (!myProducerId || !otherProducerId) {
     throw new Error('Producer IDs cannot be null or empty');
   }
@@ -60,10 +52,9 @@ export async function generateSecureNoise(myProducerId, otherProducerId, country
   }
   
   // Create context string (same as C# implementation)
-  // Include metric type to ensure different noise for each metric
   const sortedIds = [myProducerId, otherProducerId].sort();
   const monthStr = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, '0')}`;
-  const context = `${sortedIds[0]}|${sortedIds[1]}|${country}|${monthStr}|${metricType}`;
+  const context = `${sortedIds[0]}|${sortedIds[1]}|${country}|${monthStr}`;
   
   // Compute HMAC-SHA256(sharedSecret, context)
   const hash = await hmacSha256(sharedSecret, context);
@@ -96,10 +87,10 @@ export function getNoiseSign(myProducerId, otherProducerId) {
 }
 
 /**
- * Calculate the total noise and masked value for a single metric using SECURE noise
+ * Calculate the total noise and masked value using SECURE noise
  * Requires completed Diffie-Hellman key exchange with all other partners
  */
-export async function calculateMaskedValue(myProducerId, allProducerIds, country, month, actualValue, metricType = MetricType.MAU) {
+export async function calculateMaskedValue(myProducerId, allProducerIds, country, month, actualValue) {
   const otherProducers = allProducerIds.filter(id => id !== myProducerId);
   const noiseBreakdown = {};
   let totalNoise = 0;
@@ -109,7 +100,7 @@ export async function calculateMaskedValue(myProducerId, allProducerIds, country
   
   for (const otherProducerId of otherProducers) {
     // This uses HMAC with the shared secret - aggregator CANNOT compute this!
-    const appliedNoise = await generateSecureNoise(myProducerId, otherProducerId, country, month, metricType, maxNoise);
+    const appliedNoise = await generateSecureNoise(myProducerId, otherProducerId, country, month, maxNoise);
     const sign = appliedNoise >= 0 ? 1 : -1;
     
     noiseBreakdown[otherProducerId] = {
@@ -126,34 +117,6 @@ export async function calculateMaskedValue(myProducerId, allProducerIds, country
     totalNoise,
     maskedValue: actualValue + totalNoise,
     noiseBreakdown
-  };
-}
-
-/**
- * Calculate masked values for BOTH MAU and WeightedMAU in parallel
- * Returns results for both metrics independently
- */
-export async function calculateDualMaskedValues(myProducerId, allProducerIds, country, month, actualMAU, coefficient = null) {
-  // Calculate MAU masked value
-  const mauResult = await calculateMaskedValue(myProducerId, allProducerIds, country, month, actualMAU, MetricType.MAU);
-  
-  // If no coefficient provided, return only MAU result
-  if (coefficient === null || coefficient === undefined) {
-    return {
-      mau: mauResult,
-      weightedMau: null,
-      coefficient: null
-    };
-  }
-  
-  // Calculate weighted value and its masked version
-  const actualWeightedMAU = Math.round(actualMAU * coefficient);
-  const weightedResult = await calculateMaskedValue(myProducerId, allProducerIds, country, month, actualWeightedMAU, MetricType.WeightedMAU);
-  
-  return {
-    mau: mauResult,
-    weightedMau: weightedResult,
-    coefficient: coefficient
   };
 }
 

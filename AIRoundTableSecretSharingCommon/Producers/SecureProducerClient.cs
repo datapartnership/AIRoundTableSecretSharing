@@ -17,11 +17,12 @@ public class SecureProducerClient : IDisposable
     private readonly Dictionary<string, byte[]> _sharedSecrets = new();
     private bool _keysExchanged = false;
     
-    public SecureProducerClient(string producerId, string displayName, string apiBaseUrl)
+    public SecureProducerClient(string producerId, string displayName, string apiBaseUrl, string apiKey)
     {
         _producerId = producerId;
         _displayName = displayName;
         _httpClient = new HttpClient { BaseAddress = new Uri(apiBaseUrl) };
+        _httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
         _keyExchange = new DiffieHellmanKeyExchange();
     }
     
@@ -96,33 +97,13 @@ public class SecureProducerClient : IDisposable
     }
     
     /// <summary>
-    /// Step 3: Submit a metric with secure noise masking (MAU only, for backward compatibility).
+    /// Step 3: Submit a metric with secure noise masking.
     /// The noise is computed from shared secrets that the aggregator doesn't know.
     /// </summary>
     public async Task<SubmissionResult> SubmitMetricSecure(
         string country,
         DateTime month,
         long actualValue)
-    {
-        return await SubmitMetricSecure(country, month, actualValue, null, null);
-    }
-    
-    /// <summary>
-    /// Step 3: Submit dual metrics with secure noise masking.
-    /// Both MAU and WeightedMAU (MAU × coefficient) are masked independently.
-    /// The aggregator learns only the totals, not individual values or coefficients.
-    /// </summary>
-    /// <param name="country">Country code</param>
-    /// <param name="month">Month for the metric</param>
-    /// <param name="actualMAU">Actual Monthly Active Users value</param>
-    /// <param name="coefficient">Partner-specific secret coefficient (optional)</param>
-    /// <param name="actualWeightedMAU">Pre-computed weighted value (MAU × coefficient). If null but coefficient is provided, it will be computed.</param>
-    public async Task<SubmissionResult> SubmitMetricSecure(
-        string country,
-        DateTime month,
-        long actualMAU,
-        double? coefficient,
-        long? actualWeightedMAU = null)
     {
         if (!_keysExchanged)
         {
@@ -134,25 +115,14 @@ public class SecureProducerClient : IDisposable
             };
         }
         
-        // Compute weighted value if coefficient is provided but weighted value is not
-        if (coefficient.HasValue && !actualWeightedMAU.HasValue)
-        {
-            actualWeightedMAU = (long)(actualMAU * coefficient.Value);
-        }
-        
         Console.WriteLine();
         Console.WriteLine($"╔═══════════════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine($"║  {_displayName} ({_producerId}) - SECURE DUAL METRIC SUBMISSION              ");
+        Console.WriteLine($"║  {_displayName} ({_producerId}) - SECURE METRIC SUBMISSION                   ");
         Console.WriteLine($"╠═══════════════════════════════════════════════════════════════════════════╣");
         Console.WriteLine($"║  Country: {country,-20}                                            ║");
         Console.WriteLine($"║  Month: {month:yyyy-MM,-22}                                            ║");
         Console.WriteLine($"║  ─────────────────────────────────────────────────────────────────────────║");
-        Console.WriteLine($"║  Actual MAU:          {actualMAU,15:N0}                                   ║");
-        if (coefficient.HasValue)
-        {
-            Console.WriteLine($"║  Coefficient (SECRET): {coefficient.Value,14:F4}                                   ║");
-            Console.WriteLine($"║  Weighted MAU:        {actualWeightedMAU,15:N0}  (MAU × coefficient)          ║");
-        }
+        Console.WriteLine($"║  Actual MAU:          {actualValue,15:N0}                                   ║");
         Console.WriteLine($"╚═══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         
@@ -171,13 +141,13 @@ public class SecureProducerClient : IDisposable
             };
         }
         
-        Console.WriteLine($"Step 1: Generating secure noise for BOTH metrics using shared secrets");
+        Console.WriteLine($"Step 1: Generating secure noise using shared secrets");
         Console.WriteLine($"        (Aggregator CANNOT reproduce this!)");
         Console.WriteLine();
         
         // === Mask MAU value ===
-        long maskedMAU = actualMAU;
-        var mauNoiseBreakdown = new Dictionary<string, long>();
+        long maskedMAU = actualValue;
+        var noiseBreakdown = new Dictionary<string, long>();
         
         Console.WriteLine($"  📊 MAU Noise Calculation:");
         foreach (var (otherProducerId, sharedSecret) in _sharedSecrets)
@@ -186,7 +156,6 @@ public class SecureProducerClient : IDisposable
                 sharedSecret,
                 country,
                 monthStart,
-                MetricType.MAU,
                 maxNoise: 100_000_000
             );
             
@@ -194,54 +163,17 @@ public class SecureProducerClient : IDisposable
             var appliedNoise = noise * sign;
             
             maskedMAU += appliedNoise;
-            mauNoiseBreakdown[otherProducerId] = appliedNoise;
+            noiseBreakdown[otherProducerId] = appliedNoise;
             
             Console.WriteLine($"    With {otherProducerId}: {appliedNoise:+#,0;-#,0}");
         }
         Console.WriteLine($"    ─────────────────────────────────────────");
-        Console.WriteLine($"    Total MAU noise: {(maskedMAU - actualMAU):+#,0;-#,0}");
+        Console.WriteLine($"    Total noise: {(maskedMAU - actualValue):+#,0;-#,0}");
         Console.WriteLine($"    Masked MAU: {maskedMAU:N0}");
         Console.WriteLine();
         
-        // === Mask WeightedMAU value (if provided) ===
-        long? maskedWeightedMAU = null;
-        var weightedNoiseBreakdown = new Dictionary<string, long>();
-        
-        if (actualWeightedMAU.HasValue)
-        {
-            maskedWeightedMAU = actualWeightedMAU.Value;
-            
-            Console.WriteLine($"  📊 Weighted MAU Noise Calculation:");
-            foreach (var (otherProducerId, sharedSecret) in _sharedSecrets)
-            {
-                var noise = SecureNoiseGenerator.GenerateNoise(
-                    sharedSecret,
-                    country,
-                    monthStart,
-                    MetricType.WeightedMAU,
-                    maxNoise: 100_000_000
-                );
-                
-                var sign = SecureNoiseGenerator.GetNoiseSign(_producerId, otherProducerId);
-                var appliedNoise = noise * sign;
-                
-                maskedWeightedMAU += appliedNoise;
-                weightedNoiseBreakdown[otherProducerId] = appliedNoise;
-                
-                Console.WriteLine($"    With {otherProducerId}: {appliedNoise:+#,0;-#,0}");
-            }
-            Console.WriteLine($"    ─────────────────────────────────────────");
-            Console.WriteLine($"    Total Weighted noise: {(maskedWeightedMAU - actualWeightedMAU):+#,0;-#,0}");
-            Console.WriteLine($"    Masked WeightedMAU: {maskedWeightedMAU:N0}");
-            Console.WriteLine();
-        }
-        
-        Console.WriteLine($"Step 2: Submitting masked values to aggregator...");
-        Console.WriteLine($"        MAU: {maskedMAU:N0} (actual: {actualMAU:N0})");
-        if (maskedWeightedMAU.HasValue)
-        {
-            Console.WriteLine($"        WeightedMAU: {maskedWeightedMAU:N0} (actual: {actualWeightedMAU:N0})");
-        }
+        Console.WriteLine($"Step 2: Submitting masked value to aggregator...");
+        Console.WriteLine($"        MAU: {maskedMAU:N0} (actual: {actualValue:N0})");
         
         var submission = new MetricSubmission
         {
@@ -249,7 +181,6 @@ public class SecureProducerClient : IDisposable
             Country = country,
             Month = monthStart,
             Value = maskedMAU,
-            WeightedValue = maskedWeightedMAU,
             EpochId = epoch.EpochId,
             Signature = "secure-demo",
             SubmittedAt = DateTime.UtcNow
@@ -278,15 +209,10 @@ public class SecureProducerClient : IDisposable
             Success = true,
             ProducerId = _producerId,
             Message = "Submitted securely",
-            OriginalValue = actualMAU,
+            OriginalValue = actualValue,
             MaskedValue = maskedMAU,
-            NoiseApplied = maskedMAU - actualMAU,
-            NoiseBreakdown = mauNoiseBreakdown,
-            OriginalWeightedValue = actualWeightedMAU,
-            MaskedWeightedValue = maskedWeightedMAU,
-            WeightedNoiseApplied = actualWeightedMAU.HasValue ? maskedWeightedMAU - actualWeightedMAU : null,
-            WeightedNoiseBreakdown = weightedNoiseBreakdown.Count > 0 ? weightedNoiseBreakdown : null,
-            Coefficient = coefficient
+            NoiseApplied = maskedMAU - actualValue,
+            NoiseBreakdown = noiseBreakdown
         };
     }
     

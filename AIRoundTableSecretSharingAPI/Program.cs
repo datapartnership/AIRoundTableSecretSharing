@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Middleware;
 using AIRoundTableSecretSharingAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -36,6 +37,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseApiKeyAuth();
 app.UseAuthorization();
 app.MapControllers();
 

@@ -9,16 +9,23 @@ class Program
 {
     private const string ApiBaseUrl = "http://localhost:5149";
     
+    // API keys must match those configured in appsettings.json
+    private static readonly Dictionary<string, string> ApiKeys = new()
+    {
+        { "partnerA", "pA-secret-key-2026-abc123" },
+        { "partnerB", "pB-secret-key-2026-def456" },
+        { "partnerC", "pC-secret-key-2026-ghi789" }
+    };
+    
     static async Task Main(string[] args)
     {
         Console.WriteLine();
         Console.WriteLine("╔══════════════════════════════════════════════════════════════════════════╗");
         Console.WriteLine("║     SECURE Privacy-Preserving Data Aggregation Demo                      ║");
         Console.WriteLine("║     Using Diffie-Hellman Key Exchange                                    ║");
-        Console.WriteLine("║     WITH DUAL METRICS: MAU + Weighted MAU                                ║");
         Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════╣");
         Console.WriteLine("║  This version is ACTUALLY SECURE - the aggregator cannot determine       ║");
-        Console.WriteLine("║  individual values OR coefficients because it doesn't know the secrets.  ║");
+        Console.WriteLine("║  individual values because it doesn't know the shared secrets.           ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         
@@ -27,23 +34,19 @@ class Program
         var month = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1);
         
         // Actual values (these are SECRET - only each partner knows their own)
-        // Each partner also has a SECRET coefficient used for weighted calculations
-        var partnerData = new Dictionary<string, (long MAU, double Coefficient)>
+        var partnerData = new Dictionary<string, long>
         {
-            { "partnerA", (1_000_000, 1.5) },   // Partner A: 1M users, coefficient 1.5
-            { "partnerB", (500_000, 2.0) },     // Partner B: 500k users, coefficient 2.0
-            { "partnerC", (200_000, 0.8) }      // Partner C: 200k users, coefficient 0.8
+            { "partnerA", 1_000_000 },   // Partner A: 1M users
+            { "partnerB", 500_000 },     // Partner B: 500k users
+            { "partnerC", 200_000 }      // Partner C: 200k users
         };
         
-        var expectedMAUTotal = partnerData.Values.Sum(v => v.MAU);
-        var expectedWeightedTotal = partnerData.Values.Sum(v => (long)(v.MAU * v.Coefficient));
+        var expectedMAUTotal = partnerData.Values.Sum();
         
         Console.WriteLine("┌──────────────────────────────────────────────────────────────────────────┐");
-        Console.WriteLine("│  SCENARIO: World Bank collecting dual metrics                           │");
-        Console.WriteLine("│  1) Monthly Active Users (MAU) - raw count                              │");
-        Console.WriteLine("│  2) Weighted MAU (MAU × coefficient) - e.g., quality-adjusted users     │");
+        Console.WriteLine("│  SCENARIO: Development Data Partnership collecting MAU metrics          │");
+        Console.WriteLine("│  Monthly Active Users (MAU) - raw count                                 │");
         Console.WriteLine("│  Partners want to share aggregates WITHOUT revealing individual values  │");
-        Console.WriteLine("│  OR their secret coefficients!                                          │");
         Console.WriteLine("└──────────────────────────────────────────────────────────────────────────┘");
         Console.WriteLine();
         Console.WriteLine($"  Country: {country}");
@@ -51,20 +54,20 @@ class Program
         Console.WriteLine();
         Console.WriteLine("  ACTUAL VALUES (secret - only each partner knows their own):");
         Console.WriteLine("  ────────────────────────────────────────────────────────────────────────");
-        Console.WriteLine("  Partner      │   MAU       │ Coefficient │ Weighted MAU");
-        Console.WriteLine("  ─────────────┼─────────────┼─────────────┼─────────────");
-        foreach (var (partner, data) in partnerData)
+        Console.WriteLine("  Partner      │   MAU");
+        Console.WriteLine("  ─────────────┼─────────────");
+        foreach (var (partner, mau) in partnerData)
         {
-            var weighted = (long)(data.MAU * data.Coefficient);
-            Console.WriteLine($"  {partner,-12} │ {data.MAU,11:N0} │ {data.Coefficient,11:F2} │ {weighted,11:N0}");
+            Console.WriteLine($"  {partner,-12} │ {mau,11:N0}");
         }
-        Console.WriteLine("  ─────────────┼─────────────┼─────────────┼─────────────");
-        Console.WriteLine($"  {"TOTAL",-12} │ {expectedMAUTotal,11:N0} │      -      │ {expectedWeightedTotal,11:N0}");
+        Console.WriteLine("  ─────────────┼─────────────");
+        Console.WriteLine($"  {"TOTAL",-12} │ {expectedMAUTotal,11:N0}");
         Console.WriteLine();
         
         // Check if API is running
         Console.WriteLine("Checking API connection...");
         using var httpClient = new HttpClient { BaseAddress = new Uri(ApiBaseUrl) };
+        httpClient.DefaultRequestHeaders.Add("X-API-Key", ApiKeys["partnerA"]); // Use any valid key for read-only calls
         
         try
         {
@@ -106,14 +109,14 @@ class Program
         Console.WriteLine("║  Each partner generates a key pair and registers their PUBLIC key.       ║");
         Console.WriteLine("║  Private keys NEVER leave the partners' systems.                         ║");
         Console.WriteLine("║  The aggregator facilitates exchange but CANNOT compute shared secrets.  ║");
-        Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝"
+        Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         
-        // Create secure producer clients
+        // Create secure producer clients (each with their own API key)
         var clients = new Dictionary<string, SecureProducerClient>();
         foreach (var partnerId in partnerData.Keys)
         {
-            clients[partnerId] = new SecureProducerClient(partnerId, partnerId.ToUpper(), ApiBaseUrl);
+            clients[partnerId] = new SecureProducerClient(partnerId, partnerId.ToUpper(), ApiBaseUrl, ApiKeys[partnerId]);
         }
         
         // Step 1a: Each partner registers their public key
@@ -164,20 +167,18 @@ class Program
         // ═══════════════════════════════════════════════════════════════════════════
         
         Console.WriteLine("╔══════════════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║  PHASE 2: Secure Dual Metric Submissions                                ║");
+        Console.WriteLine("║  PHASE 2: Secure Metric Submissions                                      ║");
         Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║  Each partner computes noise for BOTH metrics using shared secrets:     ║");
-        Console.WriteLine("║  1. MAU - masked with one set of noise                                  ║");
-        Console.WriteLine("║  2. Weighted MAU - masked with independent noise (same secrets)         ║");
-        Console.WriteLine("║  The aggregator receives masked values but CANNOT reverse the noise.    ║");
+        Console.WriteLine("║  Each partner computes noise using shared secrets:                       ║");
+        Console.WriteLine("║  MAU is masked with noise — the aggregator CANNOT reverse the noise.    ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         
         var submissions = new List<SubmissionResult>();
         
         foreach (var (partnerId, client) in clients)
         {
-            var data = partnerData[partnerId];
-            var result = await client.SubmitMetricSecure(country, month, data.MAU, data.Coefficient);
+            var mau = partnerData[partnerId];
+            var result = await client.SubmitMetricSecure(country, month, mau);
             submissions.Add(result);
             
             Console.WriteLine();
@@ -194,7 +195,7 @@ class Program
         Console.WriteLine("║  SUBMISSION SUMMARY                                                      ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
-        Console.WriteLine("  METRIC 1: Monthly Active Users (MAU)");
+        Console.WriteLine("  Monthly Active Users (MAU)");
         Console.WriteLine("  Partner     │ Actual MAU   │ MAU Noise      │ Masked MAU");
         Console.WriteLine("  ────────────┼──────────────┼────────────────┼──────────────");
         
@@ -214,31 +215,7 @@ class Program
         
         if (totalMAUNoise == 0)
         {
-            Console.WriteLine("  ✓ MAU Total noise = 0 (noise cancels perfectly!)");
-        }
-        
-        Console.WriteLine();
-        Console.WriteLine("  METRIC 2: Weighted MAU (MAU × Coefficient)");
-        Console.WriteLine("  Partner     │ Actual Wtd   │ Wtd Noise      │ Masked Wtd");
-        Console.WriteLine("  ────────────┼──────────────┼────────────────┼──────────────");
-        
-        long totalMaskedWeighted = 0;
-        long totalWeightedNoise = 0;
-        
-        foreach (var result in submissions.Where(r => r.Success && r.MaskedWeightedValue.HasValue))
-        {
-            Console.WriteLine($"  {result.ProducerId,-11} │ {result.OriginalWeightedValue,12:N0} │ {result.WeightedNoiseApplied,+14:N0} │ {result.MaskedWeightedValue,12:N0}");
-            totalMaskedWeighted += result.MaskedWeightedValue!.Value;
-            totalWeightedNoise += result.WeightedNoiseApplied!.Value;
-        }
-        
-        Console.WriteLine("  ────────────┼──────────────┼────────────────┼──────────────");
-        Console.WriteLine($"  {"TOTAL",-11} │ {expectedWeightedTotal,12:N0} │ {totalWeightedNoise,+14:N0} │ {totalMaskedWeighted,12:N0}");
-        Console.WriteLine();
-        
-        if (totalWeightedNoise == 0)
-        {
-            Console.WriteLine("  ✓ Weighted Total noise = 0 (noise cancels perfectly!)");
+            Console.WriteLine("  ✓ Total noise = 0 (noise cancels perfectly!)");
         }
         
         Console.WriteLine();
@@ -253,9 +230,9 @@ class Program
         Console.WriteLine("╔══════════════════════════════════════════════════════════════════════════╗");
         Console.WriteLine("║  PHASE 3: Aggregation                                                   ║");
         Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║  The aggregator sums all masked values for BOTH metrics.                ║");
-        Console.WriteLine("║  Noise cancels for each metric independently, revealing only true totals║");
-        Console.WriteLine("║  Individual values AND coefficients remain CRYPTOGRAPHICALLY PROTECTED. ║");
+        Console.WriteLine("║  The aggregator sums all masked values.                                  ║");
+        Console.WriteLine("║  Noise cancels perfectly, revealing only the true total.                 ║");
+        Console.WriteLine("║  Individual values remain CRYPTOGRAPHICALLY PROTECTED.                  ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         
@@ -270,40 +247,33 @@ class Program
             {
                 Console.WriteLine("  ┌────────────────────────────────────────────────────────────────────┐");
                 Console.WriteLine($"  │  AGGREGATED MAU TOTAL:      {aggregate.Total,15:N0}                    │");
-                Console.WriteLine($"  │  AGGREGATED WEIGHTED TOTAL: {aggregate.WeightedTotal,15:N0}                    │");
                 Console.WriteLine("  └────────────────────────────────────────────────────────────────────┘");
                 Console.WriteLine();
                 
                 var mauMatches = aggregate.Total == expectedMAUTotal;
-                var weightedMatches = aggregate.WeightedTotal == expectedWeightedTotal;
                 
-                if (mauMatches && weightedMatches)
+                if (mauMatches)
                 {
                     Console.WriteLine("  ╔════════════════════════════════════════════════════════════════════╗");
-                    Console.WriteLine("  ║  ✅ SUCCESS! Both aggregates match the expected totals!            ║");
+                    Console.WriteLine("  ║  ✅ SUCCESS! Aggregate matches the expected total!                 ║");
                     Console.WriteLine("  ╠════════════════════════════════════════════════════════════════════╣");
                     Console.WriteLine("  ║                                                                    ║");
                     Console.WriteLine("  ║  SECURITY ANALYSIS:                                                ║");
                     Console.WriteLine("  ║                                                                    ║");
-                    Console.WriteLine("  ║  • The aggregator learned ONLY the totals:                        ║");
+                    Console.WriteLine("  ║  • The aggregator learned ONLY the total:                        ║");
                     Console.WriteLine($"  ║    - MAU Total: {expectedMAUTotal:N0}                                     ║");
-                    Console.WriteLine($"  ║    - Weighted Total: {expectedWeightedTotal:N0}                               ║");
                     Console.WriteLine("  ║  • Individual partner MAU values: PROTECTED                       ║");
-                    Console.WriteLine("  ║  • Partner coefficients: COMPLETELY HIDDEN                        ║");
                     Console.WriteLine("  ║  • The aggregator CANNOT:                                         ║");
                     Console.WriteLine("  ║    - Compute the shared secrets (DH problem is hard)              ║");
                     Console.WriteLine("  ║    - Reverse the noise without the secrets                        ║");
-                    Console.WriteLine("  ║    - Determine any partner's MAU or coefficient                   ║");
+                    Console.WriteLine("  ║    - Determine any partner's MAU                                  ║");
                     Console.WriteLine("  ║                                                                    ║");
-                    Console.WriteLine("  ║  This is TRUE privacy-preserving dual-metric aggregation!         ║");
+                    Console.WriteLine("  ║  This is TRUE privacy-preserving aggregation!                     ║");
                     Console.WriteLine("  ╚════════════════════════════════════════════════════════════════════╝");
                 }
                 else
                 {
-                    if (!mauMatches)
-                        Console.WriteLine($"  ⚠️  MAU Aggregate ({aggregate.Total:N0}) does not match expected ({expectedMAUTotal:N0})");
-                    if (!weightedMatches)
-                        Console.WriteLine($"  ⚠️  Weighted Aggregate ({aggregate.WeightedTotal:N0}) does not match expected ({expectedWeightedTotal:N0})");
+                    Console.WriteLine($"  ⚠️  MAU Aggregate ({aggregate.Total:N0}) does not match expected ({expectedMAUTotal:N0})");
                 }
             }
             else
@@ -315,7 +285,7 @@ class Program
         
         Console.WriteLine();
         Console.WriteLine("╔══════════════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║  Secure dual-metric demo complete!                                       ║");
+        Console.WriteLine("║  Secure demo complete!                                                   ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         

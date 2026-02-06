@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { calculateDualMaskedValues } from '../utils/noise'
+import { calculateMaskedValue } from '../utils/noise'
 import { 
   generateKeyPair, 
   exportPublicKey, 
@@ -24,6 +24,13 @@ const PARTNER_CONFIG = {
 
 const COUNTRIES = ['USA', 'UK', 'Germany', 'France', 'Japan', 'Brazil', 'India']
 
+// Default demo API keys matching appsettings.json
+const DEFAULT_API_KEYS = {
+  partnerA: 'pA-secret-key-2026-abc123',
+  partnerB: 'pB-secret-key-2026-def456',
+  partnerC: 'pC-secret-key-2026-ghi789',
+}
+
 function PartnerPage() {
   const { partnerId } = useParams()
   const partner = PARTNER_CONFIG[partnerId] || { name: partnerId, icon: '🏢', color: 'partner-a' }
@@ -34,7 +41,9 @@ function PartnerPage() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
   const [actualValue, setActualValue] = useState('')
-  const [coefficient, setCoefficient] = useState('')
+  const [apiKey, setApiKey] = useState(() => {
+    return localStorage.getItem(`apiKey_${partnerId}`) || DEFAULT_API_KEYS[partnerId] || ''
+  })
   const [calculation, setCalculation] = useState(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -53,13 +62,20 @@ function PartnerPage() {
   })
   const [keyExchangeLoading, setKeyExchangeLoading] = useState(false)
 
+  // Persist API key changes
+  useEffect(() => {
+    if (apiKey) {
+      localStorage.setItem(`apiKey_${partnerId}`, apiKey)
+    }
+  }, [apiKey, partnerId])
+
   // Fetch producers and epoch on mount
   useEffect(() => {
     async function fetchData() {
       try {
         const [producersData, epochData] = await Promise.all([
-          getProducers(),
-          getEpoch()
+          getProducers(null, apiKey),
+          getEpoch(null, apiKey)
         ])
         setProducers(producersData)
         setEpoch(epochData)
@@ -67,8 +83,8 @@ function PartnerPage() {
         setError('Failed to connect to API. Make sure the backend is running on port 5149.')
       }
     }
-    fetchData()
-  }, [])
+    if (apiKey) fetchData()
+  }, [apiKey])
 
   // Update key exchange status when producers change
   const updateKeyExchangeStatus = useCallback(() => {
@@ -96,10 +112,10 @@ function PartnerPage() {
       
       // Step 2: Export and register our public key
       const myPublicKey = await exportPublicKey(partnerId)
-      await registerPublicKey(partnerId, myPublicKey)
+      await registerPublicKey(partnerId, myPublicKey, apiKey)
       
       // Step 3: Get all other partners' public keys
-      const allKeys = await getAllPublicKeys()
+      const allKeys = await getAllPublicKeys(apiKey)
       
       // Step 4: Compute shared secrets with each partner
       for (const keyInfo of allKeys) {
@@ -139,16 +155,12 @@ function PartnerPage() {
         const monthDate = new Date(Date.UTC(year, monthNum - 1, 1))
         const producerIds = producers.map(p => p.producerId)
         
-        // Parse coefficient if provided
-        const coefficientValue = coefficient ? parseFloat(coefficient) : null
-        
-        const result = await calculateDualMaskedValues(
+        const result = await calculateMaskedValue(
           partnerId,
           producerIds,
           country,
           monthDate,
-          parseInt(actualValue),
-          coefficientValue
+          parseInt(actualValue)
         )
         
         setCalculation(result)
@@ -160,7 +172,7 @@ function PartnerPage() {
     }
     
     calculate()
-  }, [actualValue, coefficient, country, month, partnerId, producers, keyExchangeStatus.isComplete])
+  }, [actualValue, country, month, partnerId, producers, keyExchangeStatus.isComplete])
 
   const handleSubmit = async () => {
     if (!calculation || !epoch) return
@@ -177,11 +189,10 @@ function PartnerPage() {
         producerId: partnerId,
         country: country,
         month: monthDate.toISOString(),
-        value: calculation.mau.maskedValue,
-        weightedValue: calculation.weightedMau ? calculation.weightedMau.maskedValue : null,
+        value: calculation.maskedValue,
         epochId: epoch.epochId,
         signature: 'demo-signature'
-      })
+      }, apiKey)
       
       setSubmitted(true)
     } catch (err) {
@@ -193,7 +204,6 @@ function PartnerPage() {
 
   const handleReset = () => {
     setActualValue('')
-    setCoefficient('')
     setCalculation(null)
     setSubmitted(false)
     setError(null)
@@ -211,6 +221,28 @@ function PartnerPage() {
         </span>
         <h1 className="page-title">Submit Metrics</h1>
         <p className="page-subtitle">Enter your actual value — it will be masked before submission</p>
+      </div>
+
+      {/* API Key Input */}
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div className="card-header">
+          <span className="card-icon">🔑</span>
+          <h2 className="card-title">API Authentication</h2>
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">API Key</label>
+          <input
+            type="password"
+            className="form-input"
+            placeholder="Enter your API key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={submitted}
+          />
+          <div style={{ fontSize: '0.75rem', color: '#71717a', marginTop: '0.25rem' }}>
+            Each partner has a unique API key. It is stored locally in your browser.
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -263,29 +295,6 @@ function PartnerPage() {
               onChange={(e) => setActualValue(e.target.value)}
               disabled={submitted}
             />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">
-              Coefficient (Optional - for Weighted MAU)
-              <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
-                Your secret multiplier
-              </span>
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              className="form-input"
-              placeholder="e.g., 1.5"
-              value={coefficient}
-              onChange={(e) => setCoefficient(e.target.value)}
-              disabled={submitted}
-            />
-            {coefficient && actualValue && (
-              <div style={{ fontSize: '0.875rem', color: '#a1a1aa', marginTop: '0.5rem' }}>
-                Weighted MAU = {parseInt(actualValue).toLocaleString()} × {parseFloat(coefficient)} = {Math.round(parseInt(actualValue) * parseFloat(coefficient)).toLocaleString()}
-              </div>
-            )}
           </div>
 
           {epoch && (
@@ -365,10 +374,10 @@ function PartnerPage() {
                 <div className="noise-breakdown">
                   <div className="noise-item">
                     <span className="noise-label">Your Actual MAU</span>
-                    <span className="noise-value">{formatNumber(calculation.mau.actualValue)}</span>
+                    <span className="noise-value">{formatNumber(calculation.actualValue)}</span>
                   </div>
                   
-                  {Object.entries(calculation.mau.noiseBreakdown).map(([otherId, data]) => (
+                  {Object.entries(calculation.noiseBreakdown).map(([otherId, data]) => (
                     <div key={otherId} className="noise-item">
                       <span className="noise-label">
                         Noise with <strong>{otherId}</strong>
@@ -383,59 +392,18 @@ function PartnerPage() {
                   ))}
                   
                   <div className="noise-item" style={{ borderTop: '2px solid rgba(255,255,255,0.1)', marginTop: '0.5rem', paddingTop: '1rem' }}>
-                    <span className="noise-label"><strong>Total MAU Noise</strong></span>
-                    <span className={`noise-value ${calculation.mau.totalNoise >= 0 ? 'positive' : 'negative'}`}>
-                      {calculation.mau.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.mau.totalNoise)}
+                    <span className="noise-label"><strong>Total Noise</strong></span>
+                    <span className={`noise-value ${calculation.totalNoise >= 0 ? 'positive' : 'negative'}`}>
+                      {calculation.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.totalNoise)}
                     </span>
                   </div>
                 </div>
 
                 <div className="summary-box" style={{ marginTop: '1rem' }}>
                   <div className="summary-label">Masked MAU to Submit</div>
-                  <div className="summary-value">{formatNumber(calculation.mau.maskedValue)}</div>
+                  <div className="summary-value">{formatNumber(calculation.maskedValue)}</div>
                 </div>
               </div>
-
-              {/* Weighted MAU Calculation (if coefficient provided) */}
-              {calculation.weightedMau && (
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: '#8b5cf6' }}>
-                    ⚖️ Weighted MAU (MAU × {calculation.coefficient})
-                  </h3>
-                  <div className="noise-breakdown">
-                    <div className="noise-item">
-                      <span className="noise-label">Your Actual Weighted MAU</span>
-                      <span className="noise-value">{formatNumber(calculation.weightedMau.actualValue)}</span>
-                    </div>
-                    
-                    {Object.entries(calculation.weightedMau.noiseBreakdown).map(([otherId, data]) => (
-                      <div key={`weighted-${otherId}`} className="noise-item">
-                        <span className="noise-label">
-                          Noise with <strong>{otherId}</strong>
-                          <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.5rem' }}>
-                            ({data.sign > 0 ? 'add' : 'subtract'})
-                          </span>
-                        </span>
-                        <span className={`noise-value ${data.appliedNoise >= 0 ? 'positive' : 'negative'}`}>
-                          {data.appliedNoise >= 0 ? '+' : ''}{formatNumber(data.appliedNoise)}
-                        </span>
-                      </div>
-                    ))}
-                    
-                    <div className="noise-item" style={{ borderTop: '2px solid rgba(255,255,255,0.1)', marginTop: '0.5rem', paddingTop: '1rem' }}>
-                      <span className="noise-label"><strong>Total Weighted Noise</strong></span>
-                      <span className={`noise-value ${calculation.weightedMau.totalNoise >= 0 ? 'positive' : 'negative'}`}>
-                        {calculation.weightedMau.totalNoise >= 0 ? '+' : ''}{formatNumber(calculation.weightedMau.totalNoise)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="summary-box" style={{ marginTop: '1rem', background: 'rgba(139, 92, 246, 0.1)', borderColor: 'rgba(139, 92, 246, 0.3)' }}>
-                    <div className="summary-label">Masked Weighted MAU to Submit</div>
-                    <div className="summary-value">{formatNumber(calculation.weightedMau.maskedValue)}</div>
-                  </div>
-                </div>
-              )}
 
               <div style={{ marginTop: '1rem', textAlign: 'center' }}>
                 {submitted ? (

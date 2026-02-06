@@ -3,29 +3,46 @@ import { getAggregate, getEpoch } from '../utils/api'
 
 const COUNTRIES = ['USA', 'UK', 'Germany', 'France', 'Japan', 'Brazil', 'India']
 
+// Default demo API keys matching appsettings.json
+const DEFAULT_API_KEYS = {
+  partnerA: 'pA-secret-key-2026-abc123',
+  partnerB: 'pB-secret-key-2026-def456',
+  partnerC: 'pC-secret-key-2026-ghi789',
+}
+
 function Results() {
   const [country, setCountry] = useState('USA')
   const [month, setMonth] = useState(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
+  const [apiKey, setApiKey] = useState(() => {
+    return localStorage.getItem('apiKey_results') || DEFAULT_API_KEYS.partnerA || ''
+  })
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [epoch, setEpoch] = useState(null)
 
+  // Persist API key
+  useEffect(() => {
+    if (apiKey) {
+      localStorage.setItem('apiKey_results', apiKey)
+    }
+  }, [apiKey])
+
   // Fetch epoch on mount
   useEffect(() => {
     async function fetchEpoch() {
       try {
-        const epochData = await getEpoch()
+        const epochData = await getEpoch(null, apiKey)
         setEpoch(epochData)
       } catch (err) {
         // Silently handle - will show error when fetching results
       }
     }
     fetchEpoch()
-  }, [])
+  }, [apiKey])
 
   const fetchResults = async () => {
     setLoading(true)
@@ -36,7 +53,7 @@ function Results() {
       // Parse month string (e.g., "2026-01") and create date with explicit UTC to avoid timezone issues
       const [year, monthNum] = month.split('-').map(Number)
       const monthDate = new Date(Date.UTC(year, monthNum - 1, 1))
-      const data = await getAggregate(country, monthDate)
+      const data = await getAggregate(country, monthDate, apiKey)
       setResult(data)
     } catch (err) {
       setError('Failed to fetch results. Make sure the backend is running on port 5149.')
@@ -59,6 +76,27 @@ function Results() {
       <div className="page-header">
         <h1 className="page-title">📊 Aggregation Results</h1>
         <p className="page-subtitle">View the aggregated total when all partners have submitted</p>
+      </div>
+
+      {/* API Key Input */}
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div className="card-header">
+          <span className="card-icon">🔑</span>
+          <h2 className="card-title">API Authentication</h2>
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">API Key</label>
+          <input
+            type="password"
+            className="form-input"
+            placeholder="Enter any valid partner API key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <div style={{ fontSize: '0.75rem', color: '#71717a', marginTop: '0.25rem' }}>
+            Any valid partner API key can be used to view aggregation results.
+          </div>
+        </div>
       </div>
 
       {/* Query Card */}
@@ -126,40 +164,19 @@ function Results() {
 
           {result.status === 'complete' ? (
             <>
-              <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
+              <div style={{ marginBottom: '1.5rem' }}>
                 <div className="summary-box">
                   <div className="summary-label">📊 Aggregated MAU Total</div>
                   <div className="summary-value" style={{ color: '#4ade80' }}>
                     {formatNumber(result.total)}
                   </div>
                 </div>
-
-                {result.weightedTotal !== null && result.weightedTotal !== undefined && (
-                  <div className="summary-box" style={{ background: 'rgba(139, 92, 246, 0.1)', borderColor: 'rgba(139, 92, 246, 0.3)' }}>
-                    <div className="summary-label">⚖️ Aggregated Adjusted MAU</div>
-                    <div className="summary-value" style={{ color: '#a78bfa' }}>
-                      {formatNumber(result.weightedTotal)}
-                    </div>
-                  </div>
-                )}
               </div>
-
-              {result.weightedRatio !== null && result.weightedRatio !== undefined && (
-                <div className="summary-box" style={{ marginBottom: '1.5rem', background: 'rgba(251, 191, 36, 0.1)', borderColor: 'rgba(251, 191, 36, 0.3)' }}>
-                  <div className="summary-label">📈 Weighted Ratio (TotalWeightedMAU / TotalMAU)</div>
-                  <div className="summary-value" style={{ color: '#fbbf24' }}>
-                    {result.weightedRatio.toFixed(4)}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#a1a1aa', marginTop: '0.5rem' }}>
-                    = {formatNumber(result.weightedTotal)} / {formatNumber(result.total)}
-                  </div>
-                </div>
-              )}
 
               <div className="info-box" style={{ background: 'rgba(74, 222, 128, 0.1)', borderColor: 'rgba(74, 222, 128, 0.3)', color: '#86efac' }}>
                 <span className="info-box-icon">✨</span>
-                All {result.submissionCount} partners have submitted. The noise has perfectly canceled out for {result.weightedTotal !== null && result.weightedTotal !== undefined ? 'both metrics' : 'the MAU metric'}, 
-                revealing only the true aggregate total{result.weightedTotal !== null && result.weightedTotal !== undefined ? 's' : ''} — individual values {result.weightedTotal !== null && result.weightedTotal !== undefined ? 'and coefficients ' : ''}remain private!
+                All {result.submissionCount} partners have submitted. The noise has perfectly canceled out, 
+                revealing only the true aggregate total — individual values remain private!
               </div>
             </>
           ) : (

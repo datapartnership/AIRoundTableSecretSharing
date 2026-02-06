@@ -4,36 +4,13 @@ A .NET 8 + React implementation of **cryptographically secure multi-party aggreg
 
 ## 🎯 Problem Statement
 
-Imagine a scenario where the World Bank wants to collect monthly active user statistics from multiple messaging platforms (PartnerA, PartnerB, PartnerC) for each country. The partners want to contribute to the aggregate statistic but **cannot reveal their individual numbers** due to competitive sensitivity.
+Imagine a scenario where the Development Data Partnership wants to collect monthly active user statistics from multiple messaging platforms (PartnerA, PartnerB, PartnerC) for each country. The partners want to contribute to the aggregate statistic but **cannot reveal their individual numbers** due to competitive sensitivity.
 
 **Requirements:**
 - ✅ The aggregator learns the **total** across all partners
 - ✅ The aggregator **cannot** learn individual partner values (cryptographically enforced)
 - ✅ Partners do **not communicate** directly with each other
 - ✅ No pre-shared secrets required between partners
-
-## ⚖️ Dual Metric Support
-
-This implementation supports **two parallel masked metrics** submitted simultaneously:
-
-| Metric | Description | Use Case |
-|--------|-------------|----------|
-| **MAU** | Monthly Active Users (raw count) | Basic user count |
-| **Adjusted MAU** | MAU × partner-specific coefficient | Quality-adjusted users, engagement score, etc. |
-
-Each partner multiplies their MAU by a **secret coefficient** before masking. The coefficient is **never revealed** to the aggregator.
-
-### Derived Metrics
-
-The aggregator can compute:
-
-| Metric | Formula | Meaning |
-|--------|---------|---------|
-| **Total MAU** | Σ(MAU_i) | Sum of all partners' MAU |
-| **Total Adjusted MAU** | Σ(MAU_i × coef_i) | Sum of adjusted values |
-| **Weighted Ratio** | TotalAdjustedMAU / TotalMAU | Aggregate weighted coefficient |
-
-The **Weighted Ratio** represents the MAU-weighted average of all partners' coefficients — useful for computing aggregate quality scores without revealing individual coefficients.
 
 ## 🔐 The Secure Pairwise Noise Cancellation Protocol
 
@@ -61,9 +38,8 @@ The critical insight is that the aggregator facilitates the key exchange but **c
 │  Aggregator sees:     public_a, public_b                                   │
 │  Aggregator CANNOT compute: g^(a*b) (Computational Diffie-Hellman problem) │
 │                                                                             │
-│  Noise = HMAC-SHA256(shared_AB, country || month || metricType)            │
+│  Noise = HMAC-SHA256(shared_AB, country || month)                          │
 │  → Only partners can compute this, not the aggregator!                     │
-│  → Different metricType generates different noise for MAU vs AdjustedMAU   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -112,17 +88,14 @@ byte[] sharedSecret_AB = myPrivateKey.DeriveKeyMaterial(partnerA_PublicKey);
 
 #### Step 4: Generate Noise from Shared Secrets
 
-Noise is computed using HMAC-SHA256 with the shared secret as the key. Each metric type generates **independent noise**:
+Noise is computed using HMAC-SHA256 with the shared secret as the key:
 
 ```csharp
 // SecureNoiseGenerator.cs
-public enum MetricType { MAU, WeightedMAU }
-
 public static long GenerateNoise(byte[] sharedSecret, string country, 
-                                  DateTime month, MetricType metricType, long maxNoise)
+                                  DateTime month, long maxNoise)
 {
-    // Include metricType in context to generate different noise per metric
-    var context = $"{country}|{month:yyyy-MM}|{metricType}";
+    var context = $"{country}|{month:yyyy-MM}";
     
     using var hmac = new HMACSHA256(sharedSecret);
     var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(context));
@@ -136,22 +109,18 @@ public static long GenerateNoise(byte[] sharedSecret, string country,
 
 #### Step 5: Submit Masked Values
 
-Each partner calculates noise for **both metrics** and submits:
+Each partner calculates noise and submits:
 
 ```
-masked_MAU = actual_MAU + Σ(MAU_noise_with_each_partner)
-masked_AdjustedMAU = actual_MAU × coefficient + Σ(adjusted_noise_with_each_partner)
+masked_MAU = actual_MAU + Σ(noise_with_each_partner)
 ```
 
 #### Step 6: Aggregation
 
-The aggregator sums all masked values. Noise cancels perfectly for **each metric independently**:
+The aggregator sums all masked values. Noise cancels perfectly:
 
 ```
 Σ(masked_MAU) = Σ(actual_MAU) + 0 = TotalMAU ✓
-Σ(masked_AdjustedMAU) = Σ(actual_AdjustedMAU) + 0 = TotalAdjustedMAU ✓
-
-WeightedRatio = TotalAdjustedMAU / TotalMAU
 ```
 
 ### Mathematical Proof (3 Partners)
@@ -189,21 +158,7 @@ Each partner submits:
 | PartnerC | 200,000 | -80,000 (with A) -45,000 (with B) | 75,000 |
 | **Total** | **1,700,000** | **0** | **1,700,000** ✓ |
 
-#### Dual Metrics (MAU + Adjusted MAU)
-
-| Partner | MAU | Coefficient | Adjusted MAU | Masked MAU | Masked Adjusted |
-|---------|-----|-------------|--------------|------------|-----------------|
-| PartnerA | 1,000,000 | 1.5 | 1,500,000 | 1,230,000 | 1,620,000 |
-| PartnerB | 500,000 | 2.0 | 1,000,000 | 395,000 | 880,000 |
-| PartnerC | 200,000 | 0.8 | 160,000 | 75,000 | 160,000 |
-| **Total** | **1,700,000** | — | **2,660,000** | **1,700,000** ✓ | **2,660,000** ✓ |
-
-**Aggregator computes:**
-- Total MAU: 1,700,000
-- Total Adjusted MAU: 2,660,000  
-- **Weighted Ratio**: 2,660,000 / 1,700,000 = **1.5647**
-
-The aggregator learns the aggregate weighted coefficient (1.5647) but **cannot determine** individual MAU values or that PartnerB used coefficient 2.0!
+The aggregator learns only the total (1,700,000) but **cannot determine** any individual partner's MAU value!
 
 ## 🏗️ Project Structure
 
@@ -216,6 +171,8 @@ AIRoundTableSecretSharing/
 │   │   ├── MetricsController.cs           # Submit metrics, get aggregates
 │   │   ├── RegistryController.cs          # Manage partners and epochs
 │   │   └── KeyExchangeController.cs       # Diffie-Hellman key exchange
+│   ├── Middleware/
+│   │   └── ApiKeyAuthMiddleware.cs        # Per-partner API key authentication
 │   ├── Services/
 │   │   ├── InMemoryDatastore.cs           # In-memory storage for demo
 │   │   └── KeyStore.cs                    # Store partner public keys (NEVER private keys)
@@ -225,17 +182,17 @@ AIRoundTableSecretSharing/
 ├── AIRoundTableSecretSharingCommon/       # Shared library
 │   ├── Core/
 │   │   ├── DiffieHellmanKeyExchange.cs    # ECDH P-256 key pair generation
-│   │   ├── SecureNoiseGenerator.cs        # HMAC-based noise from shared secrets (with MetricType)
+│   │   ├── SecureNoiseGenerator.cs        # HMAC-based noise from shared secrets
 │   │   └── DeterministicNoiseGenerator.cs # Simple hash-based noise (demo only)
 │   ├── Models/
-│   │   ├── MetricSubmission.cs            # Submission with Value + WeightedValue
-│   │   ├── AggregationResult.cs           # Total, WeightedTotal, WeightedRatio
-│   │   ├── SubmissionResult.cs            # Dual metric submission result
+│   │   ├── MetricSubmission.cs            # Submission with masked Value
+│   │   ├── AggregationResult.cs           # Aggregation result with Total
+│   │   ├── SubmissionResult.cs            # Submission result
 │   │   ├── ProducerInfo.cs                # Partner information
 │   │   ├── ProducerEpoch.cs               # Partner set for a time period
 │   │   └── PartnerPublicKey.cs            # DH public key model
 │   └── Producers/
-│       ├── SecureProducerClient.cs        # Secure client with dual metric support
+│       ├── SecureProducerClient.cs        # Secure client with DH key exchange
 │       └── ProducerClient.cs              # Basic client (demo only)
 │
 ├── AIRoundTableSecretSharingSecureDemo/   # Console demo with full DH exchange
@@ -280,16 +237,13 @@ public class DiffieHellmanKeyExchange : IDisposable
 
 ### SecureNoiseGenerator.cs
 
-Generates noise from shared secrets using HMAC-SHA256. Supports multiple metric types:
+Generates noise from shared secrets using HMAC-SHA256:
 
 ```csharp
-public enum MetricType { MAU, WeightedMAU }
-
 public static long GenerateNoise(byte[] sharedSecret, string country, DateTime month,
-                                  MetricType metricType, long maxNoise)
+                                  long maxNoise)
 {
-    // Include metricType to generate independent noise for each metric
-    var context = $"{country}|{month:yyyy-MM}|{metricType}";
+    var context = $"{country}|{month:yyyy-MM}";
     
     using var hmac = new HMACSHA256(sharedSecret);
     var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(context));
@@ -337,6 +291,8 @@ The **Registry API** manages partner membership, while the **Key Exchange API** 
 
 ### API Endpoints
 
+All API endpoints require authentication via the `X-API-Key` header. Each partner has a unique API key configured in `appsettings.json`.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/keyexchange/register` | POST | Register a partner's DH public key |
@@ -347,6 +303,28 @@ The **Registry API** manages partner membership, while the **Key Exchange API** 
 | `/api/registry/epoch` | GET | Get current epoch info |
 | `/api/metrics/submit` | POST | Submit a masked metric |
 | `/api/metrics/aggregate` | GET | Get aggregate for country/month |
+
+### API Key Authentication
+
+All `/api/` endpoints are protected by API key authentication. Each partner is assigned a unique key in `appsettings.json`:
+
+```json
+{
+  "ApiKeys": {
+    "partnerA": "pA-secret-key-2026-abc123",
+    "partnerB": "pB-secret-key-2026-def456",
+    "partnerC": "pC-secret-key-2026-ghi789"
+  }
+}
+```
+
+Clients must include the `X-API-Key` header in every request:
+
+```bash
+curl -H "X-API-Key: pA-secret-key-2026-abc123" http://localhost:5149/api/registry/epoch
+```
+
+The middleware identifies the calling partner from the key and stores the authenticated partner ID in the request context for downstream use.
 
 ## 🚀 Getting Started
 
@@ -379,7 +357,8 @@ This demonstrates:
 2. Partners register public keys with the aggregator
 3. Partners compute shared secrets with each other (aggregator **cannot** compute these!)
 4. Noise is generated from shared secrets using HMAC-SHA256
-5. Aggregator receives masked values but **cannot** reverse engineer individual values
+5. Partners submit masked MAU values
+6. Aggregator computes the total — individual values remain **cryptographically protected**
 
 ### Run the Web UI (Visual Demo)
 
@@ -422,6 +401,7 @@ This means:
 
 | Attack Vector | Protection |
 |---------------|------------|
+| Unauthenticated access | Each partner has a unique API key; all endpoints require `X-API-Key` header |
 | Aggregator tries to compute noise | Needs shared secret; CDH problem is computationally hard |
 | Aggregator stores submissions for later | Still can't compute shared secrets without private keys |
 | Eavesdropper intercepts traffic | Only sees public keys and masked values; cannot derive secrets |
@@ -459,24 +439,29 @@ This means:
 # Register a partner's public key
 curl -X POST http://localhost:5149/api/keyexchange/register \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: pA-secret-key-2026-abc123" \
   -d '{"partnerId": "testPartner", "publicKey": "BASE64_ENCODED_PUBLIC_KEY"}'
 
 # Get all registered public keys
-curl http://localhost:5149/api/keyexchange/keys
+curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+  http://localhost:5149/api/keyexchange/keys
 
 # Check key exchange status
-curl http://localhost:5149/api/keyexchange/status
+curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+  http://localhost:5149/api/keyexchange/status
 ```
 
 ### Test Metrics Submission with curl
 
 ```bash
 # Get current epoch
-curl http://localhost:5149/api/registry/epoch
+curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+  http://localhost:5149/api/registry/epoch
 
 # Submit a metric (masked value)
 curl -X POST http://localhost:5149/api/metrics/submit \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: pA-secret-key-2026-abc123" \
   -d '{
     "producerId": "partnerA",
     "country": "USA",
@@ -487,7 +472,8 @@ curl -X POST http://localhost:5149/api/metrics/submit \
   }'
 
 # Get aggregate (requires all partners to submit)
-curl "http://localhost:5149/api/metrics/aggregate?country=USA&month=2026-01-01"
+curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+  "http://localhost:5149/api/metrics/aggregate?country=USA&month=2026-01-01"
 ```
 
 ## 📄 License

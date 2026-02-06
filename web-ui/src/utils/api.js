@@ -1,25 +1,37 @@
 const API_BASE = '/api';
 
-export async function getProducers(effectiveDate = null) {
+/**
+ * Build headers object, including X-API-Key if provided.
+ */
+function buildHeaders(apiKey, contentType = null) {
+  const headers = {};
+  if (apiKey) headers['X-API-Key'] = apiKey;
+  if (contentType) headers['Content-Type'] = contentType;
+  return headers;
+}
+
+export async function getProducers(effectiveDate = null, apiKey = null) {
   const params = effectiveDate ? `?effectiveDate=${effectiveDate.toISOString().split('T')[0]}` : '';
-  const response = await fetch(`${API_BASE}/registry/producers${params}`);
+  const response = await fetch(`${API_BASE}/registry/producers${params}`, {
+    headers: buildHeaders(apiKey),
+  });
   if (!response.ok) throw new Error('Failed to fetch producers');
   return response.json();
 }
 
-export async function getEpoch(date = null) {
+export async function getEpoch(date = null, apiKey = null) {
   const params = date ? `?date=${date.toISOString().split('T')[0]}` : '';
-  const response = await fetch(`${API_BASE}/registry/epoch${params}`);
+  const response = await fetch(`${API_BASE}/registry/epoch${params}`, {
+    headers: buildHeaders(apiKey),
+  });
   if (!response.ok) throw new Error('Failed to fetch epoch');
   return response.json();
 }
 
-export async function submitMetric(submission) {
+export async function submitMetric(submission, apiKey = null) {
   const response = await fetch(`${API_BASE}/metrics/submit`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: buildHeaders(apiKey, 'application/json'),
     body: JSON.stringify(submission),
   });
   
@@ -32,12 +44,15 @@ export async function submitMetric(submission) {
   return data;
 }
 
-export async function getAggregate(country, month) {
+export async function getAggregate(country, month, apiKey = null) {
   // month is already a Date object - use UTC methods to avoid timezone issues
   const year = month.getUTCFullYear();
   const monthNum = month.getUTCMonth() + 1;
   const monthStr = `${year}-${String(monthNum).padStart(2, '0')}-01`;
-  const response = await fetch(`${API_BASE}/metrics/aggregate?country=${encodeURIComponent(country)}&month=${monthStr}`);
+  const response = await fetch(
+    `${API_BASE}/metrics/aggregate?country=${encodeURIComponent(country)}&month=${monthStr}`,
+    { headers: buildHeaders(apiKey) }
+  );
   if (!response.ok) throw new Error('Failed to fetch aggregate');
   return response.json();
 }
@@ -47,12 +62,10 @@ export async function getAggregate(country, month) {
 /**
  * Register a partner's public key with the aggregator
  */
-export async function registerPublicKey(partnerId, publicKeyBase64) {
+export async function registerPublicKey(partnerId, publicKeyBase64, apiKey = null) {
   const response = await fetch(`${API_BASE}/keyexchange/register`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: buildHeaders(apiKey, 'application/json'),
     body: JSON.stringify({
       producerId: partnerId,
       publicKeyBase64: publicKeyBase64
@@ -70,8 +83,10 @@ export async function registerPublicKey(partnerId, publicKeyBase64) {
 /**
  * Get all registered public keys from the aggregator
  */
-export async function getAllPublicKeys() {
-  const response = await fetch(`${API_BASE}/keyexchange/keys`);
+export async function getAllPublicKeys(apiKey = null) {
+  const response = await fetch(`${API_BASE}/keyexchange/keys`, {
+    headers: buildHeaders(apiKey),
+  });
   if (!response.ok) throw new Error('Failed to fetch public keys');
   const data = await response.json();
   // API returns { partnerKeys: [...], totalPartners: n }
@@ -81,8 +96,10 @@ export async function getAllPublicKeys() {
 /**
  * Get a specific partner's public key
  */
-export async function getPublicKey(partnerId) {
-  const response = await fetch(`${API_BASE}/keyexchange/keys/${encodeURIComponent(partnerId)}`);
+export async function getPublicKey(partnerId, apiKey = null) {
+  const response = await fetch(`${API_BASE}/keyexchange/keys/${encodeURIComponent(partnerId)}`, {
+    headers: buildHeaders(apiKey),
+  });
   if (!response.ok) {
     if (response.status === 404) return null;
     throw new Error('Failed to fetch public key');
@@ -93,8 +110,10 @@ export async function getPublicKey(partnerId) {
 /**
  * Get key exchange status from the aggregator
  */
-export async function getKeyExchangeStatus() {
-  const response = await fetch(`${API_BASE}/keyexchange/status`);
+export async function getKeyExchangeStatus(apiKey = null) {
+  const response = await fetch(`${API_BASE}/keyexchange/status`, {
+    headers: buildHeaders(apiKey),
+  });
   if (!response.ok) throw new Error('Failed to fetch key exchange status');
   return response.json();
 }

@@ -4,22 +4,6 @@ using System.Text;
 namespace AIRoundTableSecretSharingCommon.Core;
 
 /// <summary>
-/// Metric types for noise generation. Each metric type generates independent noise.
-/// </summary>
-public enum MetricType
-{
-    /// <summary>
-    /// Monthly Active Users (base metric)
-    /// </summary>
-    MAU,
-    
-    /// <summary>
-    /// Weighted MAU (MAU × partner-specific coefficient)
-    /// </summary>
-    WeightedMAU
-}
-
-/// <summary>
 /// Generates cryptographically secure noise using Diffie-Hellman shared secrets.
 /// The aggregator CANNOT compute this noise because it doesn't know the shared secrets.
 /// </summary>
@@ -36,27 +20,12 @@ public static class SecureNoiseGenerator
         DateTime month,
         long maxNoise = 100_000_000)
     {
-        return GenerateNoise(sharedSecret, country, month, MetricType.MAU, maxNoise);
-    }
-    
-    /// <summary>
-    /// Generates noise for a specific metric type using the shared secret between two partners.
-    /// Different metric types generate different noise values, enabling parallel masked submissions.
-    /// </summary>
-    public static long GenerateNoise(
-        byte[] sharedSecret,
-        string country,
-        DateTime month,
-        MetricType metricType,
-        long maxNoise = 100_000_000)
-    {
         // Create context string for this specific submission
-        // Include metric type to ensure different noise for each metric
-        var contextString = $"{country}|{month:yyyy-MM}|{metricType}";
+        var contextString = $"{country}|{month:yyyy-MM}";
         var contextBytes = Encoding.UTF8.GetBytes(contextString);
         
         // Combine shared secret with context using HMAC-SHA256
-        // This ensures the noise is different for each country/month/metricType
+        // This ensures the noise is different for each country/month
         using var hmac = new HMACSHA256(sharedSecret);
         var hash = hmac.ComputeHash(contextBytes);
         
