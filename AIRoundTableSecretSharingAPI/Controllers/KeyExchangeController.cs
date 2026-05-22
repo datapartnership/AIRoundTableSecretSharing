@@ -5,11 +5,11 @@ using AIRoundTableSecretSharingCommon.Models;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 /// <summary>
-/// Handles Diffie-Hellman key exchange between partners.
-/// 
-/// SECURITY NOTE: The aggregator facilitates key exchange but CANNOT compute shared secrets.
-/// Partners' private keys never leave their systems.
-/// The aggregator only sees public keys, which are safe to transmit.
+/// Handles ML-KEM public key registration and retrieval.
+///
+/// SECURITY NOTE: The aggregator only stores ML-KEM encapsulation (public) keys.
+/// Decapsulation (private) keys never leave partners' systems.
+/// The aggregator cannot recover any shared secret from the keys it stores.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -36,13 +36,13 @@ public class KeyExchangeController : ControllerBase
             return BadRequest("ProducerId and PublicKeyBase64 are required");
         }
         
-        // Validate the public key format
+        // Validate the public key format — ML-KEM-768 encapsulation keys are exactly 1184 bytes
         try
         {
             var keyBytes = Convert.FromBase64String(request.PublicKeyBase64);
-            if (keyBytes.Length < 50) // ECDH P-256 public keys are ~91 bytes
+            if (keyBytes.Length != 1184)
             {
-                return BadRequest("Invalid public key format");
+                return BadRequest($"Invalid public key length ({keyBytes.Length}); expected 1184 bytes for ML-KEM-768.");
             }
         }
         catch (FormatException)
