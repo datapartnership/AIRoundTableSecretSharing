@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
@@ -12,6 +13,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 /// The aggregator cannot recover any shared secret from the keys it stores.
 /// </summary>
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class KeyExchangeController : ControllerBase
 {

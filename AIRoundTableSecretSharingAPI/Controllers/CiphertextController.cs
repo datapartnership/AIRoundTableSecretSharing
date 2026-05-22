@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
@@ -11,6 +12,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 /// Only the intended recipient — who holds the decapsulation key — can recover the shared secret.
 /// </summary>
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class CiphertextController : ControllerBase
 {

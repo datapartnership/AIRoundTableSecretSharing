@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using AIRoundTableSecretSharingCommon.Core;
 using AIRoundTableSecretSharingCommon.Models;
@@ -30,14 +31,43 @@ public class SecureProducerClient : IDisposable
     private bool _encapsulationDone = false;
     private bool _decapsulationDone = false;
 
-    public SecureProducerClient(string producerId, string displayName, string apiBaseUrl, string apiKey)
+    private SecureProducerClient(string producerId, string displayName, HttpClient httpClient)
     {
         _producerId = producerId;
         _displayName = displayName;
-        _httpClient = new HttpClient { BaseAddress = new Uri(apiBaseUrl) };
-        _httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+        _httpClient = httpClient;
         _kem = new MlKemKeyExchange();
     }
+
+    /// <summary>
+    /// Creates a client authenticated via OAuth 2.0 client credentials flow.
+    /// </summary>
+    public static async Task<SecureProducerClient> CreateAsync(
+        string producerId, string displayName, string apiBaseUrl,
+        string clientId, string clientSecret)
+    {
+        var httpClient = new HttpClient { BaseAddress = new Uri(apiBaseUrl) };
+
+        var tokenRequest = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("grant_type", "client_credentials"),
+            new KeyValuePair<string, string>("client_id", clientId),
+            new KeyValuePair<string, string>("client_secret", clientSecret),
+        });
+
+        var tokenResponse = await httpClient.PostAsync("/auth/token", tokenRequest);
+        tokenResponse.EnsureSuccessStatusCode();
+
+        var tokenData = await tokenResponse.Content.ReadFromJsonAsync<TokenResponse>();
+        httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", tokenData!.AccessToken);
+
+        return new SecureProducerClient(producerId, displayName, httpClient);
+    }
+
+    private record TokenResponse(
+        [property: System.Text.Json.Serialization.JsonPropertyName("access_token")] string AccessToken
+    );
 
     // ── Phase 1 ────────────────────────────────────────────────────────────────
 

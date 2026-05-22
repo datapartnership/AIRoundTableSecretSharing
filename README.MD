@@ -157,12 +157,11 @@ AIRoundTableSecretSharing/
 │
 ├── AIRoundTableSecretSharingAPI/          # ASP.NET Core Web API (Aggregator)
 │   ├── Controllers/
+│   │   ├── AuthController.cs              # OAuth 2.0 client credentials token endpoint
 │   │   ├── MetricsController.cs           # Submit metrics, get aggregates
 │   │   ├── RegistryController.cs          # Manage partners and epochs
 │   │   ├── KeyExchangeController.cs       # ML-KEM public key registration
 │   │   └── CiphertextController.cs        # ML-KEM ciphertext relay
-│   ├── Middleware/
-│   │   └── ApiKeyAuthMiddleware.cs        # Per-partner API key authentication
 │   ├── Services/
 │   │   ├── InMemoryDatastore.cs           # In-memory storage for demo
 │   │   ├── KeyStore.cs                    # Store partner encapsulation keys
@@ -287,10 +286,11 @@ An **epoch** represents a fixed set of partners for a time period. All partners 
 
 ### API Endpoints
 
-All endpoints require the `X-API-Key` header. Each partner has a unique key in `appsettings.json`.
+All `/api/` endpoints require a valid Bearer token obtained from `POST /auth/token`.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/auth/token` | POST | Obtain a Bearer token (client credentials flow) |
 | `/api/keyexchange/register` | POST | Register ML-KEM-768 encapsulation key (1184 bytes) |
 | `/api/keyexchange/keys` | GET | Get all partners' encapsulation keys |
 | `/api/keyexchange/keys/{id}` | GET | Get a specific partner's encapsulation key |
@@ -302,25 +302,29 @@ All endpoints require the `X-API-Key` header. Each partner has a unique key in `
 | `/api/metrics/submit` | POST | Submit a masked metric value |
 | `/api/metrics/aggregate` | GET | Get aggregate for a country/month |
 
-### API Key Authentication
+### Authentication — OAuth 2.0 Client Credentials
 
-All `/api/` endpoints are protected by API key authentication. Each partner is assigned a unique key in `appsettings.json`:
+All `/api/` endpoints are protected by JWT Bearer authentication. Clients first obtain a short-lived token from `POST /auth/token` using their `client_id` and `client_secret`, then include it as a Bearer token in every subsequent request.
+
+Client credentials are configured in `appsettings.json`:
 
 ```json
 {
-  "ApiKeys": {
-    "partnerA": "pA-secret-key-2026-abc123",
-    "partnerB": "pB-secret-key-2026-def456",
-    "partnerC": "pC-secret-key-2026-ghi789"
+  "Jwt": {
+    "Key": "AIRoundTable-JWT-Signing-Key-2026-MustBe32CharsOrMore!",
+    "Issuer": "AIRoundTableSecretSharingAPI",
+    "Audience": "AIRoundTableSecretSharingAPI",
+    "ExpiryMinutes": 60
+  },
+  "ClientCredentials": {
+    "partnerA": "pA-client-secret-2026-abc123",
+    "partnerB": "pB-client-secret-2026-def456",
+    "partnerC": "pC-client-secret-2026-ghi789"
   }
 }
 ```
 
-Clients must include the `X-API-Key` header in every request:
-
-```bash
-curl -H "X-API-Key: pA-secret-key-2026-abc123" http://localhost:5149/api/registry/epoch
-```
+The C# client handles this automatically via `SecureProducerClient.CreateAsync(...)`.
 
 ## 🚀 Getting Started
 
@@ -348,10 +352,11 @@ dotnet run
 ```
 
 The demo walks through:
-1. **Phase 1** — Each partner generates an ML-KEM-768 key pair and registers the encapsulation key
-2. **Phase 2** — Alphabetically larger partners encapsulate for smaller ones, posting ciphertexts to the aggregator
-3. **Phase 3** — Smaller partners fetch and decapsulate ciphertexts to recover shared secrets
-4. **Phase 4** — Each partner masks their MAU with HMAC noise and submits; the aggregator sums to the true total
+1. **Auth** — Each partner obtains a Bearer token via client credentials
+2. **Phase 1** — Each partner generates an ML-KEM-768 key pair and registers the encapsulation key
+3. **Phase 2** — Alphabetically larger partners encapsulate for smaller ones, posting ciphertexts to the aggregator
+4. **Phase 3** — Smaller partners fetch and decapsulate ciphertexts to recover shared secrets
+5. **Phase 4** — Each partner masks their MAU with HMAC noise and submits; the aggregator sums to the true total
 
 ### Run the Web UI (Visual Demo)
 
@@ -380,7 +385,8 @@ This means:
 
 | Attack Vector | Protection |
 |---------------|------------|
-| Unauthenticated access | Per-partner API keys; all endpoints require `X-API-Key` header |
+| Unauthenticated access | OAuth 2.0 client credentials; all `/api/` endpoints require a valid JWT Bearer token |
+| Token theft | JWTs are short-lived (60 min) and signed with HMAC-SHA256 |
 | Aggregator tries to recover noise | Would need shared secrets; ML-KEM is IND-CCA2 secure |
 | Aggregator stores ciphertexts indefinitely | Still cannot decapsulate without decapsulation keys |
 | Eavesdropper intercepts traffic | Sees only encapsulation keys, ciphertexts, and masked values |
@@ -402,6 +408,7 @@ This means:
 | Runtime | `System.Security.Cryptography.MLKem` (.NET 9+) | Built-in, no external dependency |
 | Noise Derivation | HMAC-SHA256 | Secure PRF; deterministic; context-bound per (country, month) |
 | Key Storage | Encapsulation keys only | Decapsulation keys never leave partners; ciphertexts are opaque to aggregator |
+| Authentication | OAuth 2.0 client credentials + JWT Bearer | Standard machine-to-machine auth; short-lived tokens; no long-lived secrets on the wire |
 
 ## 📚 Related Concepts
 
@@ -414,30 +421,41 @@ This means:
 ## 🧪 Testing with curl
 
 ```bash
+# Obtain a Bearer token (client credentials flow)
+TOKEN=$(curl -s -X POST http://localhost:5149/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=partnerB&client_secret=pB-client-secret-2026-def456" \
+  | jq -r .access_token)
+
 # Phase 1 — Register encapsulation key
 curl -X POST http://localhost:5149/api/keyexchange/register \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: pB-secret-key-2026-def456" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"producerId": "partnerB", "publicKeyBase64": "<BASE64_1184_BYTES>"}'
 
 # Get all registered encapsulation keys
-curl -H "X-API-Key: pB-secret-key-2026-def456" \
+curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:5149/api/keyexchange/keys
 
 # Phase 2 — Post ciphertext (B → A)
 curl -X POST http://localhost:5149/api/ciphertext \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: pB-secret-key-2026-def456" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"senderId": "partnerB", "recipientId": "partnerA", "ciphertextBase64": "<BASE64_1088_BYTES>"}'
 
-# Phase 3 — Fetch ciphertexts addressed to A
-curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+# Phase 3 — Fetch ciphertexts addressed to A (use partnerA token)
+TOKEN_A=$(curl -s -X POST http://localhost:5149/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=partnerA&client_secret=pA-client-secret-2026-abc123" \
+  | jq -r .access_token)
+
+curl -H "Authorization: Bearer $TOKEN_A" \
   "http://localhost:5149/api/ciphertext?recipientId=partnerA"
 
 # Phase 4 — Submit masked metric
 curl -X POST http://localhost:5149/api/metrics/submit \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: pA-secret-key-2026-abc123" \
+  -H "Authorization: Bearer $TOKEN_A" \
   -d '{
     "producerId": "partnerA",
     "country": "USA",
@@ -448,7 +466,7 @@ curl -X POST http://localhost:5149/api/metrics/submit \
   }'
 
 # Get the aggregate (requires all partners to have submitted)
-curl -H "X-API-Key: pA-secret-key-2026-abc123" \
+curl -H "Authorization: Bearer $TOKEN_A" \
   "http://localhost:5149/api/metrics/aggregate?country=USA&month=2026-05-01"
 ```
 

@@ -8,11 +8,11 @@ class Program
 {
     private const string ApiBaseUrl = "http://localhost:5149";
 
-    private static readonly Dictionary<string, string> ApiKeys = new()
+    private static readonly Dictionary<string, string> ClientSecrets = new()
     {
-        { "partnerA", "pA-secret-key-2026-abc123" },
-        { "partnerB", "pB-secret-key-2026-def456" },
-        { "partnerC", "pC-secret-key-2026-ghi789" }
+        { "partnerA", "pA-client-secret-2026-abc123" },
+        { "partnerB", "pB-client-secret-2026-def456" },
+        { "partnerC", "pC-client-secret-2026-ghi789" }
     };
 
     static async Task Main(string[] args)
@@ -63,7 +63,6 @@ class Program
         // Check API connectivity
         Console.WriteLine("Checking API connection...");
         using var httpClient = new HttpClient { BaseAddress = new Uri(ApiBaseUrl) };
-        httpClient.DefaultRequestHeaders.Add("X-API-Key", ApiKeys["partnerA"]);
 
         try
         {
@@ -89,10 +88,17 @@ class Program
         Console.ReadKey(true);
         Console.WriteLine();
 
-        // Create clients
+        // Create clients — each acquires its own Bearer token via client credentials
+        Console.WriteLine("Authenticating partners via client credentials flow...");
         var clients = new Dictionary<string, SecureProducerClient>();
         foreach (var (partnerId, _) in partnerData)
-            clients[partnerId] = new SecureProducerClient(partnerId, partnerId.ToUpper(), ApiBaseUrl, ApiKeys[partnerId]);
+        {
+            clients[partnerId] = await SecureProducerClient.CreateAsync(
+                partnerId, partnerId.ToUpper(), ApiBaseUrl,
+                clientId: partnerId, clientSecret: ClientSecrets[partnerId]);
+            Console.WriteLine($"  ✓ {partnerId} authenticated");
+        }
+        Console.WriteLine();
 
         // ═══════════════════════════════════════════════════════════════════════
         // PHASE 1: Each partner registers their ML-KEM encapsulation key

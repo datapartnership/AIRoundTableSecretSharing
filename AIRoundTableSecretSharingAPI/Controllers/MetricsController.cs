@@ -1,11 +1,13 @@
 // Controllers/MetricsController.cs
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class MetricsController : ControllerBase
 {

@@ -1,5 +1,6 @@
 
 // Controllers/RegistryController.cs
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
@@ -7,6 +8,7 @@ using AIRoundTableSecretSharingCommon.Models;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class RegistryController : ControllerBase
 {
