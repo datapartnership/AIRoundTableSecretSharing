@@ -1,5 +1,5 @@
 // Controllers/MetricsController.cs
-using AIRoundTableSecretSharingAPI.Services;
+using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,25 +11,30 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/[controller]")]
 public class MetricsController : ControllerBase
 {
-    private readonly InMemoryDataStore _dataStore;
+    private readonly IProducerRepository _producerRepo;
+    private readonly ISubmissionRepository _submissionRepo;
     private readonly ILogger<MetricsController> _logger;
-    
-    public MetricsController(InMemoryDataStore dataStore, ILogger<MetricsController> logger)
+
+    public MetricsController(
+        IProducerRepository producerRepo,
+        ISubmissionRepository submissionRepo,
+        ILogger<MetricsController> logger)
     {
-        _dataStore = dataStore;
+        _producerRepo = producerRepo;
+        _submissionRepo = submissionRepo;
         _logger = logger;
     }
-    
+
     [HttpPost("submit")]
-    public IActionResult SubmitMetric([FromBody] MetricSubmission submission)
+    public async Task<IActionResult> SubmitMetric([FromBody] MetricSubmission submission)
     {
         // Normalize month to first day
         var monthStart = new DateTime(submission.Month.Year, submission.Month.Month, 1);
         submission.Month = monthStart;
         submission.SubmittedAt = DateTime.UtcNow;
-        
+
         // Validate epoch
-        var epoch = _dataStore.GetEpochForDate(monthStart);
+        var epoch = await _producerRepo.GetEpochForDateAsync(monthStart);
         if (epoch == null || epoch.EpochId != submission.EpochId)
         {
             return BadRequest(new
@@ -39,7 +44,7 @@ public class MetricsController : ControllerBase
                 submittedEpoch = submission.EpochId
             });
         }
-        
+
         // Verify producer is in epoch
         if (!epoch.ProducerIds.Contains(submission.ProducerId))
         {
@@ -50,42 +55,42 @@ public class MetricsController : ControllerBase
                 epochId = epoch.EpochId
             });
         }
-        
+
         // Store submission
-        var added = _dataStore.AddSubmission(submission);
+        var added = await _submissionRepo.AddSubmissionAsync(submission);
         if (!added)
         {
             return Conflict("Duplicate submission");
         }
-        
+
         _logger.LogInformation(
             "RECEIVED submission from {Producer} for {Country} - {Month}: Value = {Value:N0}",
             submission.ProducerId, submission.Country, submission.Month, submission.Value);
-        
+
         return Ok(new { message = "Submission received" });
     }
-    
+
     [HttpGet("aggregate")]
-    public IActionResult GetAggregate(
+    public async Task<IActionResult> GetAggregate(
         [FromQuery] string country,
         [FromQuery] DateTime month)
     {
         var monthStart = new DateTime(month.Year, month.Month, 1);
-        var epoch = _dataStore.GetEpochForDate(monthStart);
-        
+        var epoch = await _producerRepo.GetEpochForDateAsync(monthStart);
+
         if (epoch == null)
             return NotFound("No epoch for date");
-        
-        var submissions = _dataStore.GetSubmissions(country, monthStart, epoch.EpochId);
+
+        var submissions = await _submissionRepo.GetSubmissionsAsync(country, monthStart, epoch.EpochId);
         var submittedProducers = submissions.Select(s => s.ProducerId).ToHashSet();
         var missingProducers = epoch.ProducerIds.Except(submittedProducers).ToList();
-        
+
         if (missingProducers.Any())
         {
             _logger.LogWarning(
                 "INCOMPLETE: {Country} - {Month} has {Received}/{Expected} submissions. Missing: {Missing}",
                 country, month, submissions.Count, epoch.ProducerCount, string.Join(", ", missingProducers));
-            
+
             return Ok(new AggregationResult
             {
                 Status = "incomplete",
@@ -97,14 +102,14 @@ public class MetricsController : ControllerBase
                 MissingProducers = missingProducers
             });
         }
-        
+
         // All submissions received - compute aggregates
         long total = submissions.Sum(s => s.Value);
-        
+
         _logger.LogInformation(
             "AGGREGATION COMPLETE for {Country} - {Month}: Total = {Total:N0} (noise canceled!)",
             country, month, total);
-        
+
         return Ok(new AggregationResult
         {
             Status = "complete",

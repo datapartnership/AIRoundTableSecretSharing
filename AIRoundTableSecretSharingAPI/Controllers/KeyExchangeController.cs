@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using AIRoundTableSecretSharingAPI.Services;
+using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingCommon.Models;
 
 namespace AIRoundTableSecretSharingAPI.Controllers;
@@ -17,27 +17,27 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/[controller]")]
 public class KeyExchangeController : ControllerBase
 {
-    private readonly KeyStore _keyStore;
+    private readonly IKeyRepository _keyRepo;
     private readonly ILogger<KeyExchangeController> _logger;
-    
-    public KeyExchangeController(KeyStore keyStore, ILogger<KeyExchangeController> logger)
+
+    public KeyExchangeController(IKeyRepository keyRepo, ILogger<KeyExchangeController> logger)
     {
-        _keyStore = keyStore;
+        _keyRepo = keyRepo;
         _logger = logger;
     }
-    
+
     /// <summary>
     /// Register a partner's public key for key exchange.
     /// This is called once when a partner joins the system.
     /// </summary>
     [HttpPost("register")]
-    public IActionResult RegisterPublicKey([FromBody] RegisterKeyRequest request)
+    public async Task<IActionResult> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
         if (string.IsNullOrEmpty(request.ProducerId) || string.IsNullOrEmpty(request.PublicKeyBase64))
         {
             return BadRequest("ProducerId and PublicKeyBase64 are required");
         }
-        
+
         // Validate the public key format — ML-KEM-768 encapsulation keys are exactly 1184 bytes
         try
         {
@@ -51,81 +51,82 @@ public class KeyExchangeController : ControllerBase
         {
             return BadRequest("Invalid Base64 encoding for public key");
         }
-        
+
         var partnerKey = new PartnerPublicKey
         {
             ProducerId = request.ProducerId,
             PublicKeyBase64 = request.PublicKeyBase64,
             RegisteredAt = DateTime.UtcNow
         };
-        
-        _keyStore.RegisterKey(partnerKey);
-        
+
+        await _keyRepo.RegisterKeyAsync(partnerKey);
+
+        var allKeys = await _keyRepo.GetAllKeysAsync();
         _logger.LogInformation(
             "Registered public key for {ProducerId}. Key exchange possible with {Count} other partners.",
             request.ProducerId,
-            _keyStore.GetAllKeys().Count - 1);
-        
+            allKeys.Count - 1);
+
         return Ok(new { message = "Public key registered successfully" });
     }
-    
+
     /// <summary>
     /// Get all partners' public keys for computing shared secrets.
     /// Each partner calls this to get other partners' keys.
     /// </summary>
     [HttpGet("keys")]
-    public IActionResult GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
+    public async Task<IActionResult> GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
     {
-        var allKeys = _keyStore.GetAllKeys();
-        
+        var allKeys = await _keyRepo.GetAllKeysAsync();
+
         // Optionally exclude the requesting partner's own key
         var keys = excludeProducerId != null
             ? allKeys.Where(k => k.ProducerId != excludeProducerId).ToList()
             : allKeys;
-        
+
         _logger.LogInformation(
             "Returning {Count} public keys (excluding: {Excluded})",
             keys.Count,
             excludeProducerId ?? "none");
-        
+
         return Ok(new KeyExchangeResponse
         {
             PartnerKeys = keys,
             TotalPartners = allKeys.Count
         });
     }
-    
+
     /// <summary>
     /// Get a specific partner's public key.
     /// </summary>
     [HttpGet("keys/{producerId}")]
-    public IActionResult GetPublicKey(string producerId)
+    public async Task<IActionResult> GetPublicKey(string producerId)
     {
-        var key = _keyStore.GetKey(producerId);
-        
+        var key = await _keyRepo.GetKeyAsync(producerId);
+
         if (key == null)
         {
             return NotFound($"No public key registered for {producerId}");
         }
-        
+
         return Ok(key);
     }
-    
+
     /// <summary>
     /// Check if all partners have registered their keys.
     /// Submissions should only start after key exchange is complete.
     /// </summary>
     [HttpGet("status")]
-    public IActionResult GetKeyExchangeStatus()
+    public async Task<IActionResult> GetKeyExchangeStatus()
     {
-        var registeredKeys = _keyStore.GetAllKeys();
+        var registeredKeys = await _keyRepo.GetAllKeysAsync();
         var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
-        
+
         // Get expected partners from the data store
         // In a real system, this would check against the current epoch
         var expectedPartners = new[] { "partnerA", "partnerB", "partnerC" };
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
-        
+
         return Ok(new
         {
             isComplete = !missingKeys.Any(),
