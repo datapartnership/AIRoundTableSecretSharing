@@ -1,0 +1,7 @@
+{
+  "api_base_url": "http://localhost:5149",
+  "producer_id": "partnerA",
+  "display_name": "Partner A",
+  "client_id": "partnerA",
+  "client_secret": "your-secret-here"
+}

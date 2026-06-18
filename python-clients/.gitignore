@@ -1,0 +1,5 @@
+# Local credentials — never commit
+config.json
+
+# Generated keypair files
+keys/
