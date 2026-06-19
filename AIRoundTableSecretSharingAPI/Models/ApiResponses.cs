@@ -28,3 +28,15 @@ public class KeyExchangeStatusResponse
     public List<string> RegisteredPartners { get; set; } = new();
     public List<string> MissingPartners { get; set; } = new();
 }
+
+public class SubmittedEntry
+{
+    public string Country { get; set; } = string.Empty;
+    public DateTime Month { get; set; }
+}
+
+public class ProducerSubmissionsResponse
+{
+    public int EpochId { get; set; }
+    public List<SubmittedEntry> Submissions { get; set; } = new();
+}

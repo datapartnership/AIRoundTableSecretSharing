@@ -10,4 +10,6 @@ public interface ISubmissionRepository
     Task<bool> AddSubmissionAsync(MetricSubmission submission);
 
     Task<List<MetricSubmission>> GetSubmissionsAsync(string country, DateTime month, int epochId);
+
+    Task<List<MetricSubmission>> GetSubmissionsByProducerAsync(string producerId, int epochId);
 }

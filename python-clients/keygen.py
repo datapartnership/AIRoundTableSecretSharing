@@ -52,8 +52,14 @@ def get_token(api_base_url, client_id, client_secret):
             "client_secret": client_secret,
         },
     )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    if not resp.ok:
+        print(f"ERROR: Authentication failed (HTTP {resp.status_code}): {resp.text}")
+        sys.exit(1)
+    data = resp.json()
+    if "accessToken" not in data:
+        print(f"ERROR: Unexpected auth response: {data}")
+        sys.exit(1)
+    return data["accessToken"]
 
 
 def main():

@@ -90,8 +90,14 @@ def get_token(api_base_url, client_id, client_secret):
             "client_secret": client_secret,
         },
     )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    if not resp.ok:
+        print(f"ERROR: Authentication failed (HTTP {resp.status_code}): {resp.text}")
+        sys.exit(1)
+    data = resp.json()
+    if "accessToken" not in data:
+        print(f"ERROR: Unexpected auth response: {data}")
+        sys.exit(1)
+    return data["accessToken"]
 
 
 def compute_noise(shared_secret, country, month_str):
@@ -145,6 +151,18 @@ def load_submissions():
         print("ERROR: No valid rows found in submissions.csv. Fill in the value column and retry.")
         sys.exit(1)
     return rows
+
+
+def fetch_my_submissions(api_base_url, headers):
+    """Returns (epoch_id, set of (country, 'YYYY-MM') already submitted)."""
+    resp = requests.get(f"{api_base_url}/api/metrics/mysubmissions", headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    submitted = {
+        (entry["country"], entry["month"][:7])  # slice 'YYYY-MM' from ISO datetime
+        for entry in data.get("submissions", [])
+    }
+    return data["epochId"], submitted
 
 
 def main():
@@ -224,21 +242,27 @@ def main():
         print("  No shared secrets established — values will be submitted without noise masking")
 
     # ------------------------------------------------------------------
-    # Phase 4: Fetch epoch once, then submit each row from the CSV
+    # Phase 4: Fetch epoch + already-submitted rows, then submit each CSV row
     # ------------------------------------------------------------------
     print("\n--- Phase 4: Noise Calculation & Submission ---")
-    print("\nFetching current epoch...")
-    epoch_resp = requests.get(f"{api_base_url}/api/registry/epoch", headers=headers)
-    epoch_resp.raise_for_status()
-    epoch_id = epoch_resp.json()["epochId"]
+    print("\nChecking existing submissions...")
+    epoch_id, already_submitted = fetch_my_submissions(api_base_url, headers)
     print(f"  Epoch ID: {epoch_id}")
+    if already_submitted:
+        print(f"  Already submitted {len(already_submitted)} row(s) this epoch")
 
     success_count = 0
+    skipped_count = 0
     failure_count = 0
 
     for country, month_dt, actual_value in submissions:
         month_str = month_dt.strftime("%Y-%m")
         month_iso = month_dt.strftime("%Y-%m-01T00:00:00Z")
+
+        if (country, month_str) in already_submitted:
+            print(f"  [{country} {month_str}] WARNING: already submitted for this epoch, skipping")
+            skipped_count += 1
+            continue
 
         masked_value = actual_value
         for partner_id, shared_secret in sorted(shared_secrets.items()):
@@ -261,6 +285,11 @@ def main():
                 json=submission,
                 headers=headers,
             )
+            if resp.status_code == 409:
+                # Race condition safeguard — shouldn't normally reach here
+                print(f"  [{country} {month_str}] WARNING: already submitted for this epoch, skipping")
+                skipped_count += 1
+                continue
             resp.raise_for_status()
             msg = resp.json().get("message", resp.text)
             print(f"  [{country} {month_str}] masked={masked_value:,}  → {msg}")
@@ -269,7 +298,7 @@ def main():
             print(f"  [{country} {month_str}] ERROR: {e}")
             failure_count += 1
 
-    print(f"\nDone. {success_count} submitted, {failure_count} failed.")
+    print(f"\nDone. {success_count} submitted, {skipped_count} already submitted (skipped), {failure_count} failed.")
 
 
 if __name__ == "__main__":

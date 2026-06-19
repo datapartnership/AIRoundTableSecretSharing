@@ -1,4 +1,6 @@
 // Controllers/MetricsController.cs
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingCommon.Models;
@@ -72,6 +74,32 @@ public class MetricsController : ControllerBase
             submission.ProducerId, submission.Country, submission.Month, submission.Value);
 
         return Ok(new MessageResponse { Message = "Submission received" });
+    }
+
+    [HttpGet("mysubmissions")]
+    [ProducesResponseType(typeof(ProducerSubmissionsResponse), 200)]
+    [ProducesResponseType(401)]
+    public async Task<ActionResult<ProducerSubmissionsResponse>> GetMySubmissions()
+    {
+        var producerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (string.IsNullOrEmpty(producerId))
+            return Unauthorized();
+
+        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
+        if (epoch == null)
+            return Ok(new ProducerSubmissionsResponse { EpochId = 0, Submissions = [] });
+
+        var submissions = await _submissionRepo.GetSubmissionsByProducerAsync(producerId, epoch.EpochId);
+
+        return Ok(new ProducerSubmissionsResponse
+        {
+            EpochId = epoch.EpochId,
+            Submissions = submissions
+                .Select(s => new SubmittedEntry { Country = s.Country, Month = s.Month })
+                .ToList()
+        });
     }
 
     [HttpGet("aggregate")]
