@@ -4,7 +4,7 @@ public class MetricSubmission
 {
     public string ProducerId { get; set; }
     public string Country { get; set; }
-    public DateTime Month { get; set; }
+    public string Month { get; set; }
     
     /// <summary>
     /// Masked Monthly Active Users (MAU) value

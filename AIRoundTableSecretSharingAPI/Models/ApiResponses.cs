@@ -27,12 +27,16 @@ public class KeyExchangeStatusResponse
     public int ExpectedCount { get; set; }
     public List<string> RegisteredPartners { get; set; } = new();
     public List<string> MissingPartners { get; set; } = new();
+    public int ActualCiphertexts { get; set; }
+    public int ExpectedCiphertexts { get; set; }
+    public bool IsCiphertextExchangeComplete { get; set; }
+    public List<string> MissingCiphertextSenders { get; set; } = new();
 }
 
 public class SubmittedEntry
 {
     public string Country { get; set; } = string.Empty;
-    public DateTime Month { get; set; }
+    public string Month { get; set; } = string.Empty;
 }
 
 public class ProducerSubmissionsResponse

@@ -9,7 +9,9 @@ public interface ISubmissionRepository
     /// </summary>
     Task<bool> AddSubmissionAsync(MetricSubmission submission);
 
-    Task<List<MetricSubmission>> GetSubmissionsAsync(string country, DateTime month, int epochId);
+    Task<List<MetricSubmission>> GetSubmissionsAsync(string country, string month, int epochId);
 
     Task<List<MetricSubmission>> GetSubmissionsByProducerAsync(string producerId, int epochId);
+
+    Task ClearAllAsync();
 }

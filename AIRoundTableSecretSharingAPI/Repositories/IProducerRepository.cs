@@ -8,4 +8,7 @@ public interface IProducerRepository
     Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date);
     Task AddProducerAsync(ProducerInfo producer);
     Task CreateEpochAsync(ProducerEpoch epoch);
+    Task AddEpochAsync(ProducerEpoch epoch);
+
+    Task ClearAllAsync();
 }

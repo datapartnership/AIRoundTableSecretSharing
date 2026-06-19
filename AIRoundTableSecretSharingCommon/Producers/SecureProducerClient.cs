@@ -302,7 +302,7 @@ public class SecureProducerClient : IDisposable
         {
             ProducerId = _producerId,
             Country = country,
-            Month = monthStart,
+            Month = monthStart.ToString("yyyy-MM"),
             Value = maskedMAU,
             EpochId = epoch.EpochId,
             Signature = "mlkem-demo",

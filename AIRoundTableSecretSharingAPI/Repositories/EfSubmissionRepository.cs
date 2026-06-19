@@ -26,7 +26,7 @@ public class EfSubmissionRepository : ISubmissionRepository
         return true;
     }
 
-    public Task<List<MetricSubmission>> GetSubmissionsAsync(string country, DateTime month, int epochId) =>
+    public Task<List<MetricSubmission>> GetSubmissionsAsync(string country, string month, int epochId) =>
         _db.Submissions
             .Where(s => s.Country == country && s.Month == month && s.EpochId == epochId)
             .ToListAsync();
@@ -35,4 +35,10 @@ public class EfSubmissionRepository : ISubmissionRepository
         _db.Submissions
             .Where(s => s.ProducerId == producerId && s.EpochId == epochId)
             .ToListAsync();
+
+    public async Task ClearAllAsync()
+    {
+        _db.Submissions.RemoveRange(_db.Submissions);
+        await _db.SaveChangesAsync();
+    }
 }

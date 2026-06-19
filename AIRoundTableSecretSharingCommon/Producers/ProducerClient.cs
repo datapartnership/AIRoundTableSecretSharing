@@ -115,7 +115,7 @@ public class ProducerClient
         {
             ProducerId = _producerId,
             Country = country,
-            Month = monthStart,
+            Month = monthStart.ToString("yyyy-MM"),
             Value = maskedValue,
             EpochId = epoch.EpochId,
             Signature = "demo-signature",

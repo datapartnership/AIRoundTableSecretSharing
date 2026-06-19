@@ -37,4 +37,17 @@ public class EfProducerRepository : IProducerRepository
         _db.Epochs.Add(epoch);
         await _db.SaveChangesAsync();
     }
+
+    public async Task ClearAllAsync()
+    {
+        _db.Epochs.RemoveRange(_db.Epochs);
+        _db.Producers.RemoveRange(_db.Producers);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task AddEpochAsync(ProducerEpoch epoch)
+    {
+        _db.Epochs.Add(epoch);
+        await _db.SaveChangesAsync();
+    }
 }

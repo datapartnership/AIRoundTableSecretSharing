@@ -19,11 +19,19 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 public class KeyExchangeController : ControllerBase
 {
     private readonly IKeyRepository _keyRepo;
+    private readonly IProducerRepository _producerRepo;
+    private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<KeyExchangeController> _logger;
 
-    public KeyExchangeController(IKeyRepository keyRepo, ILogger<KeyExchangeController> logger)
+    public KeyExchangeController(
+        IKeyRepository keyRepo,
+        IProducerRepository producerRepo,
+        ICiphertextRepository ciphertextRepo,
+        ILogger<KeyExchangeController> logger)
     {
         _keyRepo = keyRepo;
+        _producerRepo = producerRepo;
+        _ciphertextRepo = ciphertextRepo;
         _logger = logger;
     }
 
@@ -129,18 +137,34 @@ public class KeyExchangeController : ControllerBase
         var registeredKeys = await _keyRepo.GetAllKeysAsync();
         var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
 
-        // Get expected partners from the data store
-        // In a real system, this would check against the current epoch
-        var expectedPartners = new[] { "partnerA", "partnerB", "partnerC" };
+        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
+        var expectedPartners = epoch?.ProducerIds ?? [];
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
+
+        var n = expectedPartners.Count;
+        var expectedCiphertexts = n * (n - 1) / 2;
+        var actualCiphertexts = n > 0
+            ? await _ciphertextRepo.CountForPartnersAsync(expectedPartners)
+            : 0;
+        var postedSenders = n > 0
+            ? await _ciphertextRepo.GetSenderIdsForPartnersAsync(expectedPartners)
+            : [];
+        // Partners who must send at least one ciphertext: those who are NOT the alphabetical minimum
+        var sortedPartners = expectedPartners.Order().ToList();
+        var expectedSenders = sortedPartners.Skip(1).ToList(); // everyone except the smallest
+        var missingSenders = expectedSenders.Except(postedSenders).ToList();
 
         return Ok(new KeyExchangeStatusResponse
         {
             IsComplete = !missingKeys.Any(),
-            RegisteredCount = registeredKeys.Count,
-            ExpectedCount = expectedPartners.Length,
+            RegisteredCount = registeredIds.Count,
+            ExpectedCount = expectedPartners.Count,
             RegisteredPartners = registeredIds.ToList(),
-            MissingPartners = missingKeys
+            MissingPartners = missingKeys,
+            ActualCiphertexts = actualCiphertexts,
+            ExpectedCiphertexts = expectedCiphertexts,
+            IsCiphertextExchangeComplete = actualCiphertexts >= expectedCiphertexts,
+            MissingCiphertextSenders = missingSenders
         });
     }
 }

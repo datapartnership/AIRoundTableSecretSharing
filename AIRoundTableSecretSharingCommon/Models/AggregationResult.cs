@@ -4,7 +4,7 @@ public class AggregationResult
 {
     public string Status { get; set; }
     public string Country { get; set; }
-    public DateTime Month { get; set; }
+    public string Month { get; set; }
     
     /// <summary>
     /// Total MAU across all partners (noise-cancelled aggregate)

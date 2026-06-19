@@ -55,7 +55,9 @@ public class RegistryController : ControllerBase
     }
 
     [HttpPost("producers")]
+    [Authorize(Policy = "AdminOnly")]
     [ProducesResponseType(typeof(AddProducerResponse), 200)]
+    [ProducesResponseType(403)]
     public async Task<ActionResult<AddProducerResponse>> AddProducer([FromBody] AddProducerRequest request)
     {
         var startDate = new DateTime(

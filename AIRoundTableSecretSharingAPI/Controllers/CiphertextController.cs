@@ -1,7 +1,7 @@
 using AIRoundTableSecretSharingAPI.Models;
+using AIRoundTableSecretSharingAPI.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 
 namespace AIRoundTableSecretSharingAPI.Controllers;
@@ -17,12 +17,12 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/[controller]")]
 public class CiphertextController : ControllerBase
 {
-    private readonly CiphertextStore _store;
+    private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<CiphertextController> _logger;
 
-    public CiphertextController(CiphertextStore store, ILogger<CiphertextController> logger)
+    public CiphertextController(ICiphertextRepository ciphertextRepo, ILogger<CiphertextController> logger)
     {
-        _store = store;
+        _ciphertextRepo = ciphertextRepo;
         _logger = logger;
     }
 
@@ -32,7 +32,7 @@ public class CiphertextController : ControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
-    public ActionResult<MessageResponse> StoreCiphertext([FromBody] StoreCiphertextRequest request)
+    public async Task<ActionResult<MessageResponse>> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
         if (string.IsNullOrEmpty(request.SenderId) ||
             string.IsNullOrEmpty(request.RecipientId) ||
@@ -64,7 +64,7 @@ public class CiphertextController : ControllerBase
             StoredAt = DateTime.UtcNow
         };
 
-        _store.Store(ct);
+        await _ciphertextRepo.StoreAsync(ct);
 
         _logger.LogInformation(
             "Stored ML-KEM ciphertext from {Sender} to {Recipient}.",
@@ -79,12 +79,12 @@ public class CiphertextController : ControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
     [ProducesResponseType(400)]
-    public ActionResult<CiphertextResponse> GetCiphertexts([FromQuery] string recipientId)
+    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] string recipientId)
     {
         if (string.IsNullOrEmpty(recipientId))
             return BadRequest("recipientId query parameter is required.");
 
-        var ciphertexts = _store.GetForRecipient(recipientId);
+        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(recipientId);
 
         _logger.LogInformation(
             "Returning {Count} ciphertext(s) for {Recipient}.",

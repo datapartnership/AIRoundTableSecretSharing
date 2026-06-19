@@ -14,6 +14,7 @@ public class AppDbContext : DbContext
     public DbSet<ProducerEpoch> Epochs => Set<ProducerEpoch>();
     public DbSet<MetricSubmission> Submissions => Set<MetricSubmission>();
     public DbSet<PartnerPublicKey> PublicKeys => Set<PartnerPublicKey>();
+    public DbSet<PartnerCiphertext> Ciphertexts => Set<PartnerCiphertext>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -64,6 +65,15 @@ public class AppDbContext : DbContext
             e.HasKey(k => k.ProducerId);
             e.Property(k => k.ProducerId).HasMaxLength(100);
             e.Property(k => k.PublicKeyBase64).HasColumnType("nvarchar(max)");
+        });
+
+        // PartnerCiphertext — composite PK (SenderId, RecipientId); upsert on re-run
+        modelBuilder.Entity<PartnerCiphertext>(e =>
+        {
+            e.HasKey(c => new { c.SenderId, c.RecipientId });
+            e.Property(c => c.SenderId).HasMaxLength(100);
+            e.Property(c => c.RecipientId).HasMaxLength(100);
+            e.Property(c => c.CiphertextBase64).HasColumnType("nvarchar(max)");
         });
     }
 }

@@ -16,15 +16,21 @@ public class MetricsController : ControllerBase
 {
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IKeyRepository _keyRepo;
+    private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<MetricsController> _logger;
 
     public MetricsController(
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
+        IKeyRepository keyRepo,
+        ICiphertextRepository ciphertextRepo,
         ILogger<MetricsController> logger)
     {
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
+        _keyRepo = keyRepo;
+        _ciphertextRepo = ciphertextRepo;
         _logger = logger;
     }
 
@@ -34,13 +40,24 @@ public class MetricsController : ControllerBase
     [ProducesResponseType(409)]
     public async Task<ActionResult<MessageResponse>> SubmitMetric([FromBody] MetricSubmission submission)
     {
-        // Normalize month to first day
-        var monthStart = new DateTime(submission.Month.Year, submission.Month.Month, 1);
-        submission.Month = monthStart;
+        // Identity is taken from the authenticated token — body field is ignored
+        submission.ProducerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+        // Validate and normalise month format to YYYY-MM
+        if (string.IsNullOrEmpty(submission.Month) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(submission.Month, @"^\d{4}-\d{2}$"))
+        {
+            return BadRequest(new { error = "Month must be in YYYY-MM format (e.g. 2025-01)" });
+        }
+
         submission.SubmittedAt = DateTime.UtcNow;
 
+        // Parse month string for epoch lookup
+        var monthDate = DateTime.ParseExact(submission.Month, "yyyy-MM",
+            System.Globalization.CultureInfo.InvariantCulture);
+
         // Validate epoch
-        var epoch = await _producerRepo.GetEpochForDateAsync(monthStart);
+        var epoch = await _producerRepo.GetEpochForDateAsync(monthDate);
         if (epoch == null || epoch.EpochId != submission.EpochId)
         {
             return BadRequest(new
@@ -59,6 +76,34 @@ public class MetricsController : ControllerBase
                 error = "Producer not in epoch",
                 producerId = submission.ProducerId,
                 epochId = epoch.EpochId
+            });
+        }
+
+        // Verify key exchange is complete before accepting any submission.
+        // Every partner must have registered a public key and every pair must
+        // have exchanged a ciphertext, otherwise noise will not cancel.
+        var registeredKeys = await _keyRepo.GetAllKeysAsync();
+        var registeredKeyIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
+        var missingKeys = epoch.ProducerIds.Except(registeredKeyIds).ToList();
+        if (missingKeys.Count > 0)
+        {
+            return UnprocessableEntity(new
+            {
+                error = "Key exchange incomplete: missing public keys",
+                missingPublicKeys = missingKeys
+            });
+        }
+
+        var n = epoch.ProducerIds.Count;
+        var expectedCiphertexts = n * (n - 1) / 2;
+        var actualCiphertexts = await _ciphertextRepo.CountForPartnersAsync(epoch.ProducerIds);
+        if (actualCiphertexts < expectedCiphertexts)
+        {
+            return UnprocessableEntity(new
+            {
+                error = "Key exchange incomplete: not all ciphertexts posted",
+                expectedCiphertexts,
+                actualCiphertexts
             });
         }
 
@@ -109,15 +154,22 @@ public class MetricsController : ControllerBase
     [ProducesResponseType(404)]
     public async Task<ActionResult<AggregationResult>> GetAggregate(
         [FromQuery] string country,
-        [FromQuery] DateTime month)
+        [FromQuery] string month)
     {
-        var monthStart = new DateTime(month.Year, month.Month, 1);
-        var epoch = await _producerRepo.GetEpochForDateAsync(monthStart);
+        if (string.IsNullOrEmpty(month) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(month, @"^\d{4}-\d{2}$"))
+        {
+            return BadRequest(new { error = "month must be in YYYY-MM format (e.g. 2025-01)" });
+        }
+
+        var monthDate = DateTime.ParseExact(month, "yyyy-MM",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var epoch = await _producerRepo.GetEpochForDateAsync(monthDate);
 
         if (epoch == null)
             return NotFound("No epoch for date");
 
-        var submissions = await _submissionRepo.GetSubmissionsAsync(country, monthStart, epoch.EpochId);
+        var submissions = await _submissionRepo.GetSubmissionsAsync(country, month, epoch.EpochId);
         var submittedProducers = submissions.Select(s => s.ProducerId).ToHashSet();
         var missingProducers = epoch.ProducerIds.Except(submittedProducers).ToList();
 
@@ -131,7 +183,7 @@ public class MetricsController : ControllerBase
             {
                 Status = "incomplete",
                 Country = country,
-                Month = monthStart,
+                Month = month,
                 Total = null,
                 SubmissionCount = submissions.Count,
                 ExpectedSubmissions = epoch.ProducerCount,
@@ -150,7 +202,7 @@ public class MetricsController : ControllerBase
         {
             Status = "complete",
             Country = country,
-            Month = monthStart,
+            Month = month,
             Total = total,
             SubmissionCount = submissions.Count,
             ExpectedSubmissions = epoch.ProducerCount,

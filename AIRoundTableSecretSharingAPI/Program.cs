@@ -1,7 +1,6 @@
 using System.Text;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
-using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +28,8 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Keep claim names exactly as issued (prevents "role" → ClaimTypes.Role remapping)
+        options.MapInboundClaims = false;
         var jwtKey = builder.Configuration["Jwt:Key"]!;
         options.TokenValidationParameters = new TokenValidationParameters
         {
@@ -48,7 +49,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IProducerRepository, EfProducerRepository>();
 builder.Services.AddScoped<ISubmissionRepository, EfSubmissionRepository>();
 builder.Services.AddScoped<IKeyRepository, EfKeyRepository>();
-builder.Services.AddSingleton<CiphertextStore>();
+builder.Services.AddScoped<ICiphertextRepository, EfCiphertextRepository>();
 
 var app = builder.Build();
 

@@ -153,13 +153,33 @@ def load_submissions():
     return rows
 
 
+def secrets_file(producer_id):
+    return os.path.join(KEYS_DIR, f"{producer_id}_secrets.json")
+
+
+def load_secrets(producer_id):
+    path = secrets_file(producer_id)
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        raw = json.load(f)
+    return {pid: base64.b64decode(s) for pid, s in raw.items()}
+
+
+def save_secrets(producer_id, shared_secrets):
+    path = secrets_file(producer_id)
+    os.makedirs(KEYS_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({pid: base64.b64encode(s).decode() for pid, s in shared_secrets.items()}, f, indent=2)
+
+
 def fetch_my_submissions(api_base_url, headers):
     """Returns (epoch_id, set of (country, 'YYYY-MM') already submitted)."""
     resp = requests.get(f"{api_base_url}/api/metrics/mysubmissions", headers=headers)
     resp.raise_for_status()
     data = resp.json()
     submitted = {
-        (entry["country"], entry["month"][:7])  # slice 'YYYY-MM' from ISO datetime
+        (entry["country"], entry["month"])  # already YYYY-MM string
         for entry in data.get("submissions", [])
     }
     return data["epochId"], submitted
@@ -182,7 +202,20 @@ def main():
     token = get_token(api_base_url, client_id, client_secret)
     headers = {"Authorization": f"Bearer {token}"}
 
-    shared_secrets: dict[str, bytes] = {}
+    print("\nChecking key exchange status...")
+    status_resp = requests.get(f"{api_base_url}/api/keyexchange/status", headers=headers)
+    status_resp.raise_for_status()
+    status = status_resp.json()
+    if not status["isComplete"]:
+        missing = ", ".join(status["missingPartners"])
+        print(
+            f"ERROR: Key exchange incomplete — {status['registeredCount']}/{status['expectedCount']} "
+            f"partners have registered keys.\n"
+            f"       Missing: {missing}\n"
+            f"       Ask them to run keygen.py first, then retry."
+        )
+        sys.exit(1)
+    print(f"  All {status['expectedCount']} partners have registered keys — proceeding")
 
     # ------------------------------------------------------------------
     # Phase 2: Encapsulation
@@ -197,24 +230,31 @@ def main():
     resp.raise_for_status()
     partner_keys = resp.json().get("partnerKeys", [])
 
+    # Load any previously established secrets to avoid re-encapsulating
+    # (re-encapsulation generates a new random secret, breaking noise cancellation)
+    shared_secrets = load_secrets(producer_id)
+
     for partner in partner_keys:
         partner_id = partner["producerId"]
         if producer_id > partner_id:
-            partner_public_key = base64.b64decode(partner["publicKeyBase64"])
-            shared_secret, ciphertext = Kyber768.encaps(partner_public_key)  # returns (key, ct)
-            shared_secrets[partner_id] = shared_secret
-            ct_b64 = base64.b64encode(ciphertext).decode()
-            store_resp = requests.post(
-                f"{api_base_url}/api/ciphertext",
-                json={
-                    "SenderId": producer_id,
-                    "RecipientId": partner_id,
-                    "CiphertextBase64": ct_b64,
-                },
-                headers=headers,
-            )
-            store_resp.raise_for_status()
-            print(f"  Encapsulated for {partner_id} and stored ciphertext")
+            if partner_id in shared_secrets:
+                print(f"  Ciphertext already posted for {partner_id} — reusing persisted secret")
+            else:
+                partner_public_key = base64.b64decode(partner["publicKeyBase64"])
+                shared_secret, ciphertext = Kyber768.encaps(partner_public_key)  # returns (key, ct)
+                shared_secrets[partner_id] = shared_secret
+                ct_b64 = base64.b64encode(ciphertext).decode()
+                store_resp = requests.post(
+                    f"{api_base_url}/api/ciphertext",
+                    json={
+                        "SenderId": producer_id,
+                        "RecipientId": partner_id,
+                        "CiphertextBase64": ct_b64,
+                    },
+                    headers=headers,
+                )
+                store_resp.raise_for_status()
+                print(f"  Encapsulated for {partner_id} and stored ciphertext")
         else:
             print(f"  Skipping {partner_id} — they will encapsulate for us")
 
@@ -233,13 +273,32 @@ def main():
 
     for entry in incoming:
         sender_id = entry["senderId"]
-        ciphertext = base64.b64decode(entry["ciphertextBase64"])
-        shared_secret = Kyber768.decaps(secret_key, ciphertext)
-        shared_secrets[sender_id] = shared_secret
-        print(f"  Decapsulated shared secret from {sender_id}")
+        if sender_id in shared_secrets:
+            print(f"  Already have secret from {sender_id} — skipping decapsulation")
+        else:
+            ciphertext = base64.b64decode(entry["ciphertextBase64"])
+            shared_secret = Kyber768.decaps(secret_key, ciphertext)
+            shared_secrets[sender_id] = shared_secret
+            print(f"  Decapsulated shared secret from {sender_id}")
+
+    save_secrets(producer_id, shared_secrets)
 
     if not shared_secrets:
         print("  No shared secrets established — values will be submitted without noise masking")
+
+    # Check all ciphertexts are posted before proceeding to submission
+    status_resp = requests.get(f"{api_base_url}/api/keyexchange/status", headers=headers)
+    status_resp.raise_for_status()
+    status = status_resp.json()
+    if not status["isCiphertextExchangeComplete"]:
+        missing = ", ".join(status.get("missingCiphertextSenders", []))
+        print(
+            f"\nERROR: Ciphertext exchange incomplete — "
+            f"{status['actualCiphertexts']}/{status['expectedCiphertexts']} ciphertexts posted.\n"
+            f"       Partners who still need to run submit.py: {missing}\n"
+            f"       Ask them to run submit.py, then retry."
+        )
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Phase 4: Fetch epoch + already-submitted rows, then submit each CSV row
@@ -257,7 +316,6 @@ def main():
 
     for country, month_dt, actual_value in submissions:
         month_str = month_dt.strftime("%Y-%m")
-        month_iso = month_dt.strftime("%Y-%m-01T00:00:00Z")
 
         if (country, month_str) in already_submitted:
             print(f"  [{country} {month_str}] WARNING: already submitted for this epoch, skipping")
@@ -273,11 +331,11 @@ def main():
         submission = {
             "ProducerId": producer_id,
             "Country": country,
-            "Month": month_iso,
+            "Month": month_str,
             "Value": masked_value,
             "EpochId": epoch_id,
             "Signature": "mlkem-demo",
-            "SubmittedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "SubmittedAt": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         try:
             resp = requests.post(
@@ -295,7 +353,7 @@ def main():
             print(f"  [{country} {month_str}] masked={masked_value:,}  → {msg}")
             success_count += 1
         except requests.HTTPError as e:
-            print(f"  [{country} {month_str}] ERROR: {e}")
+            print(f"  [{country} {month_str}] ERROR: {e} — {resp.text}")
             failure_count += 1
 
     print(f"\nDone. {success_count} submitted, {skipped_count} already submitted (skipped), {failure_count} failed.")

@@ -1,5 +1,8 @@
 # Local credentials — never commit
 .env
+.envA
+.envB
+.envC
 
 # Generated keypair files
 keys/

@@ -38,8 +38,9 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<int>("EpochId")
                         .HasColumnType("int");
 
-                    b.Property<DateTime>("Month")
-                        .HasColumnType("datetime2");
+                    b.Property<string>("Month")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<string>("ProducerId")
                         .IsRequired()
@@ -63,6 +64,28 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                         .IsUnique();
 
                     b.ToTable("Submissions");
+                });
+
+            modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.PartnerCiphertext", b =>
+                {
+                    b.Property<string>("SenderId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("RecipientId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("CiphertextBase64")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("StoredAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("SenderId", "RecipientId");
+
+                    b.ToTable("Ciphertexts");
                 });
 
             modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.PartnerPublicKey", b =>

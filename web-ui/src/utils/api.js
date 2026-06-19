@@ -67,7 +67,7 @@ export async function submitMetric(submission, token = null) {
 export async function getAggregate(country, month, token = null) {
   const year = month.getUTCFullYear();
   const monthNum = month.getUTCMonth() + 1;
-  const monthStr = `${year}-${String(monthNum).padStart(2, '0')}-01`;
+  const monthStr = `${year}-${String(monthNum).padStart(2, '0')}`;
   const response = await fetch(
     `${API_BASE}/metrics/aggregate?country=${encodeURIComponent(country)}&month=${monthStr}`,
     { headers: buildHeaders(token) }
