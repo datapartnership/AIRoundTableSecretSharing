@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-submit.py - Submit a masked metric using the ML-KEM-768 secure noise protocol.
+submit.py - Submit masked metrics using previously established shared secrets.
 
-Mirrors the 4-phase protocol of SecureProducerClient.cs:
-  Phase 1  (prerequisite) - keygen.py must have already run to produce a keypair.
-  Phase 2  Encapsulation  - fetch partner public keys, encapsulate shared secrets,
-                            post ciphertexts to the API.
-  Phase 3  Decapsulation  - fetch incoming ciphertexts, derive shared secrets.
-  Phase 4  Submit         - for each row in submissions.csv, apply HMAC noise
-                            and post the masked metric.
+Prerequisites (run in order):
+  1. keygen.py   - generate and register your ML-KEM-768 keypair
+  2. exchange.py - perform ciphertext exchange with all partners
+  3. submit.py   - this script
 
-Fill in submissions.csv (country, month, value) before running.
+For each row in submissions.csv, applies HMAC noise derived from the shared
+secrets established by exchange.py and posts the masked value to the API.
 Rows with an empty value are skipped.
 
 Noise formula (self-consistent among Python producers):
@@ -39,7 +37,6 @@ import struct
 import sys
 
 from dotenv import load_dotenv
-from kyber_py.kyber import Kyber768
 import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,22 +60,6 @@ def load_config():
         print(f"ERROR: Missing required .env variables: {', '.join(missing)}")
         sys.exit(1)
     return config
-
-
-def load_key(producer_id):
-    key_file = os.path.join(KEYS_DIR, f"{producer_id}.json")
-    if not os.path.exists(key_file):
-        print(
-            f"ERROR: Key file not found at {key_file}.\n"
-            "       Run keygen.py first to generate and register your keypair."
-        )
-        sys.exit(1)
-    with open(key_file) as f:
-        data = json.load(f)
-    return (
-        base64.b64decode(data["public_key_b64"]),
-        base64.b64decode(data["secret_key_b64"]),
-    )
 
 
 def get_token(api_base_url, client_id, client_secret):
@@ -166,13 +147,6 @@ def load_secrets(producer_id):
     return {pid: base64.b64decode(s) for pid, s in raw.items()}
 
 
-def save_secrets(producer_id, shared_secrets):
-    path = secrets_file(producer_id)
-    os.makedirs(KEYS_DIR, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump({pid: base64.b64encode(s).decode() for pid, s in shared_secrets.items()}, f, indent=2)
-
-
 def fetch_my_submissions(api_base_url, headers):
     """Returns (epoch_id, set of (country, 'YYYY-MM') already submitted)."""
     resp = requests.get(f"{api_base_url}/api/metrics/mysubmissions", headers=headers)
@@ -196,114 +170,36 @@ def main():
     print(f"Producer: {producer_id}")
     print(f"Loaded {len(submissions)} row(s) from submissions.csv")
 
-    _, secret_key = load_key(producer_id)
+    shared_secrets = load_secrets(producer_id)
+    if not shared_secrets:
+        print(
+            f"ERROR: No shared secrets found for '{producer_id}'.\n"
+            "       Run exchange.py first to complete the ciphertext exchange."
+        )
+        sys.exit(1)
 
     print("\nAuthenticating...")
     token = get_token(api_base_url, client_id, client_secret)
     headers = {"Authorization": f"Bearer {token}"}
 
-    print("\nChecking key exchange status...")
-    status_resp = requests.get(f"{api_base_url}/api/keyexchange/status", headers=headers)
-    status_resp.raise_for_status()
-    status = status_resp.json()
-    if not status["isComplete"]:
-        missing = ", ".join(status["missingPartners"])
-        print(
-            f"ERROR: Key exchange incomplete — {status['registeredCount']}/{status['expectedCount']} "
-            f"partners have registered keys.\n"
-            f"       Missing: {missing}\n"
-            f"       Ask them to run keygen.py first, then retry."
-        )
-        sys.exit(1)
-    print(f"  All {status['expectedCount']} partners have registered keys — proceeding")
-
-    # ------------------------------------------------------------------
-    # Phase 2: Encapsulation
-    # The alphabetically LARGER producer encapsulates for the smaller one.
-    # ------------------------------------------------------------------
-    print("\n--- Phase 2: Encapsulation ---")
-    resp = requests.get(
-        f"{api_base_url}/api/keyexchange/keys",
-        params={"excludeProducerId": producer_id},
-        headers=headers,
-    )
-    resp.raise_for_status()
-    partner_keys = resp.json().get("partnerKeys", [])
-
-    # Load any previously established secrets to avoid re-encapsulating
-    # (re-encapsulation generates a new random secret, breaking noise cancellation)
-    shared_secrets = load_secrets(producer_id)
-
-    for partner in partner_keys:
-        partner_id = partner["producerId"]
-        if producer_id > partner_id:
-            if partner_id in shared_secrets:
-                print(f"  Ciphertext already posted for {partner_id} — reusing persisted secret")
-            else:
-                partner_public_key = base64.b64decode(partner["publicKeyBase64"])
-                shared_secret, ciphertext = Kyber768.encaps(partner_public_key)  # returns (key, ct)
-                shared_secrets[partner_id] = shared_secret
-                ct_b64 = base64.b64encode(ciphertext).decode()
-                store_resp = requests.post(
-                    f"{api_base_url}/api/ciphertext",
-                    json={
-                        "SenderId": producer_id,
-                        "RecipientId": partner_id,
-                        "CiphertextBase64": ct_b64,
-                    },
-                    headers=headers,
-                )
-                store_resp.raise_for_status()
-                print(f"  Encapsulated for {partner_id} and stored ciphertext")
-        else:
-            print(f"  Skipping {partner_id} — they will encapsulate for us")
-
-    # ------------------------------------------------------------------
-    # Phase 3: Decapsulation
-    # Receive ciphertexts from partners that encapsulated for us (larger IDs).
-    # ------------------------------------------------------------------
-    print("\n--- Phase 3: Decapsulation ---")
-    resp = requests.get(
-        f"{api_base_url}/api/ciphertext",
-        params={"recipientId": producer_id},
-        headers=headers,
-    )
-    resp.raise_for_status()
-    incoming = resp.json().get("ciphertexts", [])
-
-    for entry in incoming:
-        sender_id = entry["senderId"]
-        if sender_id in shared_secrets:
-            print(f"  Already have secret from {sender_id} — skipping decapsulation")
-        else:
-            ciphertext = base64.b64decode(entry["ciphertextBase64"])
-            shared_secret = Kyber768.decaps(secret_key, ciphertext)
-            shared_secrets[sender_id] = shared_secret
-            print(f"  Decapsulated shared secret from {sender_id}")
-
-    save_secrets(producer_id, shared_secrets)
-
-    if not shared_secrets:
-        print("  No shared secrets established — values will be submitted without noise masking")
-
-    # Check all ciphertexts are posted before proceeding to submission
+    # Belt-and-suspenders: confirm the server also sees a complete exchange.
     status_resp = requests.get(f"{api_base_url}/api/keyexchange/status", headers=headers)
     status_resp.raise_for_status()
     status = status_resp.json()
     if not status["isCiphertextExchangeComplete"]:
         missing = ", ".join(status.get("missingCiphertextSenders", []))
         print(
-            f"\nERROR: Ciphertext exchange incomplete — "
+            f"ERROR: Ciphertext exchange incomplete — "
             f"{status['actualCiphertexts']}/{status['expectedCiphertexts']} ciphertexts posted.\n"
-            f"       Partners who still need to run submit.py: {missing}\n"
-            f"       Ask them to run submit.py, then retry."
+            f"       Waiting for: {missing}\n"
+            f"       Ask them to run exchange.py, then retry."
         )
         sys.exit(1)
 
     # ------------------------------------------------------------------
     # Phase 4: Fetch epoch + already-submitted rows, then submit each CSV row
     # ------------------------------------------------------------------
-    print("\n--- Phase 4: Noise Calculation & Submission ---")
+    print("\n--- Noise Calculation & Submission ---")
     print("\nChecking existing submissions...")
     epoch_id, already_submitted = fetch_my_submissions(api_base_url, headers)
     print(f"  Epoch ID: {epoch_id}")
@@ -318,7 +214,7 @@ def main():
         month_str = month_dt.strftime("%Y-%m")
 
         if (country, month_str) in already_submitted:
-            print(f"  [{country} {month_str}] WARNING: already submitted for this epoch, skipping")
+            print(f"  [{country} {month_str}] already submitted this epoch — skipping")
             skipped_count += 1
             continue
 
@@ -345,12 +241,12 @@ def main():
             )
             if resp.status_code == 409:
                 # Race condition safeguard — shouldn't normally reach here
-                print(f"  [{country} {month_str}] WARNING: already submitted for this epoch, skipping")
+                print(f"  [{country} {month_str}] already submitted this epoch — skipping")
                 skipped_count += 1
                 continue
             resp.raise_for_status()
             msg = resp.json().get("message", resp.text)
-            print(f"  [{country} {month_str}] masked={masked_value:,}  → {msg}")
+            print(f"  [{country} {month_str}] Submitted → {msg}")
             success_count += 1
         except requests.HTTPError as e:
             print(f"  [{country} {month_str}] ERROR: {e} — {resp.text}")

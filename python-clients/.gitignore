@@ -7,3 +7,4 @@
 # Generated keypair files
 keys/
 .venv/
+__pycache__
