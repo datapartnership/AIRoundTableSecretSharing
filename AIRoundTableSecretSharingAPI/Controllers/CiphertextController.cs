@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Services;
@@ -29,7 +30,9 @@ public class CiphertextController : ControllerBase
     /// Store a KEM ciphertext. Called by the alphabetically larger partner after encapsulation.
     /// </summary>
     [HttpPost]
-    public IActionResult StoreCiphertext([FromBody] StoreCiphertextRequest request)
+    [ProducesResponseType(typeof(MessageResponse), 200)]
+    [ProducesResponseType(400)]
+    public ActionResult<MessageResponse> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
         if (string.IsNullOrEmpty(request.SenderId) ||
             string.IsNullOrEmpty(request.RecipientId) ||
@@ -67,14 +70,16 @@ public class CiphertextController : ControllerBase
             "Stored ML-KEM ciphertext from {Sender} to {Recipient}.",
             request.SenderId, request.RecipientId);
 
-        return Ok(new { message = "Ciphertext stored." });
+        return Ok(new MessageResponse { Message = "Ciphertext stored." });
     }
 
     /// <summary>
     /// Retrieve all ciphertexts addressed to a given partner. Called by the smaller partner to decapsulate.
     /// </summary>
     [HttpGet]
-    public IActionResult GetCiphertexts([FromQuery] string recipientId)
+    [ProducesResponseType(typeof(CiphertextResponse), 200)]
+    [ProducesResponseType(400)]
+    public ActionResult<CiphertextResponse> GetCiphertexts([FromQuery] string recipientId)
     {
         if (string.IsNullOrEmpty(recipientId))
             return BadRequest("recipientId query parameter is required.");

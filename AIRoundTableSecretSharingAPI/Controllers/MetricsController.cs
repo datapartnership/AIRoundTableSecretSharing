@@ -1,4 +1,5 @@
 // Controllers/MetricsController.cs
+using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -26,7 +27,10 @@ public class MetricsController : ControllerBase
     }
 
     [HttpPost("submit")]
-    public async Task<IActionResult> SubmitMetric([FromBody] MetricSubmission submission)
+    [ProducesResponseType(typeof(MessageResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
+    public async Task<ActionResult<MessageResponse>> SubmitMetric([FromBody] MetricSubmission submission)
     {
         // Normalize month to first day
         var monthStart = new DateTime(submission.Month.Year, submission.Month.Month, 1);
@@ -67,11 +71,15 @@ public class MetricsController : ControllerBase
             "RECEIVED submission from {Producer} for {Country} - {Month}: Value = {Value:N0}",
             submission.ProducerId, submission.Country, submission.Month, submission.Value);
 
-        return Ok(new { message = "Submission received" });
+        return Ok(new MessageResponse { Message = "Submission received" });
     }
 
     [HttpGet("aggregate")]
-    public async Task<IActionResult> GetAggregate(
+    [Authorize(Policy = "AdminOnly")]
+    [ProducesResponseType(typeof(AggregationResult), 200)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<AggregationResult>> GetAggregate(
         [FromQuery] string country,
         [FromQuery] DateTime month)
     {

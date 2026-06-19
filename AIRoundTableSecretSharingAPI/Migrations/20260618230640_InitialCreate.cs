@@ -15,8 +15,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                 name: "Epochs",
                 columns: table => new
                 {
-                    EpochId = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("SqlServer:Identity", "1, 1"),
+                    EpochId = table.Column<int>(type: "int", nullable: false),
                     StartDate = table.Column<DateTime>(type: "datetime2", nullable: false),
                     EndDate = table.Column<DateTime>(type: "datetime2", nullable: true),
                     ProducerIds = table.Column<string>(type: "nvarchar(max)", nullable: false),

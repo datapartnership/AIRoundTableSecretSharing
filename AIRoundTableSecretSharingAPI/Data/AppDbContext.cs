@@ -39,6 +39,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ProducerEpoch>(e =>
         {
             e.HasKey(ep => ep.EpochId);
+            // EpochId is an application-assigned value, not a DB-generated identity
+            e.Property(ep => ep.EpochId).ValueGeneratedNever();
             e.Property(ep => ep.ProducerIds)
                 .HasConversion(listConverter, listComparer)
                 .HasColumnType("nvarchar(max)");

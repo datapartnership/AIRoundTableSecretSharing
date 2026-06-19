@@ -23,6 +23,9 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("AdminOnly", policy => policy.RequireClaim("role", "admin")));
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {

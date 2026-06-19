@@ -1,5 +1,6 @@
 
 // Controllers/RegistryController.cs
+using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Repositories;
@@ -22,7 +23,8 @@ public class RegistryController : ControllerBase
     }
 
     [HttpGet("producers")]
-    public async Task<IActionResult> GetProducers([FromQuery] DateTime? effectiveDate = null)
+    [ProducesResponseType(typeof(List<ProducerInfo>), 200)]
+    public async Task<ActionResult<List<ProducerInfo>>> GetProducers([FromQuery] DateTime? effectiveDate = null)
     {
         var date = effectiveDate ?? DateTime.UtcNow;
         var producers = await _producerRepo.GetActiveProducersAsync(date);
@@ -35,7 +37,9 @@ public class RegistryController : ControllerBase
     }
 
     [HttpGet("epoch")]
-    public async Task<IActionResult> GetEpoch([FromQuery] DateTime? date = null)
+    [ProducesResponseType(typeof(ProducerEpoch), 200)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<ProducerEpoch>> GetEpoch([FromQuery] DateTime? date = null)
     {
         var effectiveDate = date ?? DateTime.UtcNow;
         var epoch = await _producerRepo.GetEpochForDateAsync(effectiveDate);
@@ -51,7 +55,8 @@ public class RegistryController : ControllerBase
     }
 
     [HttpPost("producers")]
-    public async Task<IActionResult> AddProducer([FromBody] AddProducerRequest request)
+    [ProducesResponseType(typeof(AddProducerResponse), 200)]
+    public async Task<ActionResult<AddProducerResponse>> AddProducer([FromBody] AddProducerRequest request)
     {
         var startDate = new DateTime(
             request.StartDate.Year,
@@ -86,7 +91,7 @@ public class RegistryController : ControllerBase
             "Added producer {ProducerId}, effective {StartDate}. New epoch {EpochId} created.",
             request.ProducerId, startDate, newEpoch.EpochId);
 
-        return Ok(new { message = "Producer added", epoch = newEpoch });
+        return Ok(new AddProducerResponse { Message = "Producer added", Epoch = newEpoch });
     }
 }
 

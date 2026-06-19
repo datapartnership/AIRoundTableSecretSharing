@@ -7,7 +7,11 @@ Mirrors the 4-phase protocol of SecureProducerClient.cs:
   Phase 2  Encapsulation  - fetch partner public keys, encapsulate shared secrets,
                             post ciphertexts to the API.
   Phase 3  Decapsulation  - fetch incoming ciphertexts, derive shared secrets.
-  Phase 4  Submit         - apply HMAC noise to the value, post masked metric.
+  Phase 4  Submit         - for each row in submissions.csv, apply HMAC noise
+                            and post the masked metric.
+
+Fill in submissions.csv (country, month, value) before running.
+Rows with an empty value are skipped.
 
 Noise formula (self-consistent among Python producers):
   h    = HMAC-SHA256(key=shared_secret, msg="{country}|{YYYY-MM}")
@@ -19,13 +23,13 @@ NOTE: this formula is NOT compatible with the C# SecureNoiseGenerator, which use
 C# formula as well.
 
 Usage:
-    python submit.py --country US --month 2025-01 --value 1000000
+    python submit.py
 
-Configuration is read from config.json in the same directory.
+Configuration is read from a .env file in the same directory.
 """
 
-import argparse
 import base64
+import csv
 import datetime
 import hashlib
 import hmac as hmac_module
@@ -34,24 +38,31 @@ import os
 import struct
 import sys
 
-import oqs
+from dotenv import load_dotenv
+from kyber_py.kyber import Kyber768
 import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 KEYS_DIR = os.path.join(SCRIPT_DIR, "keys")
 MAX_NOISE = 100_000_000
 
 
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
+    env_file = os.path.join(SCRIPT_DIR, ".env")
+    if not os.path.exists(env_file):
         print(
-            "ERROR: config.json not found.\n"
-            "       Copy config.json.example to config.json and fill in your credentials."
+            "ERROR: .env not found.\n"
+            "       Copy .env.example to .env and fill in your credentials."
         )
         sys.exit(1)
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
+    load_dotenv(env_file)
+    required = ["API_BASE_URL", "CLIENT_ID", "CLIENT_SECRET"]
+    config = {key: os.getenv(key) for key in required}
+    missing = [k for k, v in config.items() if not v]
+    if missing:
+        print(f"ERROR: Missing required .env variables: {', '.join(missing)}")
+        sys.exit(1)
+    return config
 
 
 def load_key(producer_id):
@@ -103,36 +114,49 @@ def noise_sign(my_id, other_id):
     return 1 if my_id < other_id else -1
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Submit a masked metric via the ML-KEM-768 secure noise protocol."
-    )
-    parser.add_argument("--country", required=True, help="Country code, e.g. US")
-    parser.add_argument(
-        "--month", required=True, help="Reporting month in YYYY-MM format, e.g. 2025-01"
-    )
-    parser.add_argument("--value", required=True, type=int, help="Actual (private) metric value")
-    args = parser.parse_args()
-
-    try:
-        month_dt = datetime.datetime.strptime(args.month, "%Y-%m")
-    except ValueError:
-        print("ERROR: --month must be in YYYY-MM format (e.g. 2025-01)")
+def load_submissions():
+    csv_file = os.path.join(SCRIPT_DIR, "submissions.csv")
+    if not os.path.exists(csv_file):
+        print("ERROR: submissions.csv not found in the script directory.")
         sys.exit(1)
+    rows = []
+    with open(csv_file, newline="") as f:
+        for i, row in enumerate(csv.DictReader(f), start=2):  # start=2: row 1 is header
+            country = row.get("country", "").strip()
+            month_raw = row.get("month", "").strip()
+            value_raw = row.get("value", "").strip()
+            if not value_raw:
+                continue  # skip unfilled rows
+            if not country or not month_raw:
+                print(f"WARNING: skipping row {i} — missing country or month")
+                continue
+            try:
+                month_dt = datetime.datetime.strptime(month_raw, "%Y-%m")
+            except ValueError:
+                print(f"WARNING: skipping row {i} — invalid month '{month_raw}' (expected YYYY-MM)")
+                continue
+            try:
+                value = int(value_raw)
+            except ValueError:
+                print(f"WARNING: skipping row {i} — invalid value '{value_raw}'")
+                continue
+            rows.append((country, month_dt, value))
+    if not rows:
+        print("ERROR: No valid rows found in submissions.csv. Fill in the value column and retry.")
+        sys.exit(1)
+    return rows
 
-    month_str = month_dt.strftime("%Y-%m")
-    month_iso = month_dt.strftime("%Y-%m-01T00:00:00Z")
 
+def main():
     config = load_config()
-    api_base_url = config["api_base_url"].rstrip("/")
-    producer_id = config["producer_id"]
-    client_id = config["client_id"]
-    client_secret = config["client_secret"]
+    api_base_url = config["API_BASE_URL"].rstrip("/")
+    client_id = config["CLIENT_ID"]
+    client_secret = config["CLIENT_SECRET"]
+    producer_id = client_id
 
-    print(f"Producer:     {producer_id}")
-    print(f"Country:      {args.country}")
-    print(f"Month:        {month_str}")
-    print(f"Actual value: {args.value:,}")
+    submissions = load_submissions()
+    print(f"Producer: {producer_id}")
+    print(f"Loaded {len(submissions)} row(s) from submissions.csv")
 
     _, secret_key = load_key(producer_id)
 
@@ -159,8 +183,7 @@ def main():
         partner_id = partner["producerId"]
         if producer_id > partner_id:
             partner_public_key = base64.b64decode(partner["publicKeyBase64"])
-            with oqs.KeyEncapsulation("Kyber768") as kem:
-                ciphertext, shared_secret = kem.encap_secret(partner_public_key)
+            shared_secret, ciphertext = Kyber768.encaps(partner_public_key)  # returns (key, ct)
             shared_secrets[partner_id] = shared_secret
             ct_b64 = base64.b64encode(ciphertext).decode()
             store_resp = requests.post(
@@ -190,60 +213,63 @@ def main():
     resp.raise_for_status()
     incoming = resp.json().get("ciphertexts", [])
 
-    with oqs.KeyEncapsulation("Kyber768", secret_key) as kem:
-        for entry in incoming:
-            sender_id = entry["senderId"]
-            ciphertext = base64.b64decode(entry["ciphertextBase64"])
-            shared_secret = kem.decap_secret(ciphertext)
-            shared_secrets[sender_id] = shared_secret
-            print(f"  Decapsulated shared secret from {sender_id}")
+    for entry in incoming:
+        sender_id = entry["senderId"]
+        ciphertext = base64.b64decode(entry["ciphertextBase64"])
+        shared_secret = Kyber768.decaps(secret_key, ciphertext)
+        shared_secrets[sender_id] = shared_secret
+        print(f"  Decapsulated shared secret from {sender_id}")
 
     if not shared_secrets:
-        print("  No shared secrets established — value will be submitted without noise masking")
+        print("  No shared secrets established — values will be submitted without noise masking")
 
     # ------------------------------------------------------------------
-    # Phase 4: Compute masked value and submit
+    # Phase 4: Fetch epoch once, then submit each row from the CSV
     # ------------------------------------------------------------------
     print("\n--- Phase 4: Noise Calculation & Submission ---")
-    masked_value = args.value
-    noise_breakdown: dict[str, int] = {}
-
-    for partner_id, shared_secret in sorted(shared_secrets.items()):
-        noise = compute_noise(shared_secret, args.country, month_str)
-        sign = noise_sign(producer_id, partner_id)
-        applied = noise * sign
-        noise_breakdown[partner_id] = applied
-        masked_value += applied
-        print(f"  {partner_id}: raw_noise={noise:+,}  sign={sign:+d}  applied={applied:+,}")
-
-    total_noise = masked_value - args.value
-    print(f"\n  Original value : {args.value:,}")
-    print(f"  Total noise    : {total_noise:+,}")
-    print(f"  Masked value   : {masked_value:,}")
-
     print("\nFetching current epoch...")
     epoch_resp = requests.get(f"{api_base_url}/api/registry/epoch", headers=headers)
     epoch_resp.raise_for_status()
     epoch_id = epoch_resp.json()["epochId"]
     print(f"  Epoch ID: {epoch_id}")
 
-    print("\nSubmitting masked metric...")
-    submission = {
-        "ProducerId": producer_id,
-        "Country": args.country,
-        "Month": month_iso,
-        "Value": masked_value,
-        "EpochId": epoch_id,
-        "Signature": "mlkem-demo",
-        "SubmittedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    submit_resp = requests.post(
-        f"{api_base_url}/api/metrics/submit",
-        json=submission,
-        headers=headers,
-    )
-    submit_resp.raise_for_status()
-    print(f"API response: {submit_resp.json().get('message', submit_resp.text)}")
+    success_count = 0
+    failure_count = 0
+
+    for country, month_dt, actual_value in submissions:
+        month_str = month_dt.strftime("%Y-%m")
+        month_iso = month_dt.strftime("%Y-%m-01T00:00:00Z")
+
+        masked_value = actual_value
+        for partner_id, shared_secret in sorted(shared_secrets.items()):
+            noise = compute_noise(shared_secret, country, month_str)
+            sign = noise_sign(producer_id, partner_id)
+            masked_value += noise * sign
+
+        submission = {
+            "ProducerId": producer_id,
+            "Country": country,
+            "Month": month_iso,
+            "Value": masked_value,
+            "EpochId": epoch_id,
+            "Signature": "mlkem-demo",
+            "SubmittedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        try:
+            resp = requests.post(
+                f"{api_base_url}/api/metrics/submit",
+                json=submission,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            msg = resp.json().get("message", resp.text)
+            print(f"  [{country} {month_str}] masked={masked_value:,}  → {msg}")
+            success_count += 1
+        except requests.HTTPError as e:
+            print(f"  [{country} {month_str}] ERROR: {e}")
+            failure_count += 1
+
+    print(f"\nDone. {success_count} submitted, {failure_count} failed.")
 
 
 if __name__ == "__main__":

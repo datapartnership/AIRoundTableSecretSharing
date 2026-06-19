@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Repositories;
@@ -31,7 +32,9 @@ public class KeyExchangeController : ControllerBase
     /// This is called once when a partner joins the system.
     /// </summary>
     [HttpPost("register")]
-    public async Task<IActionResult> RegisterPublicKey([FromBody] RegisterKeyRequest request)
+    [ProducesResponseType(typeof(MessageResponse), 200)]
+    [ProducesResponseType(400)]
+    public async Task<ActionResult<MessageResponse>> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
         if (string.IsNullOrEmpty(request.ProducerId) || string.IsNullOrEmpty(request.PublicKeyBase64))
         {
@@ -67,7 +70,7 @@ public class KeyExchangeController : ControllerBase
             request.ProducerId,
             allKeys.Count - 1);
 
-        return Ok(new { message = "Public key registered successfully" });
+        return Ok(new MessageResponse { Message = "Public key registered successfully" });
     }
 
     /// <summary>
@@ -75,7 +78,8 @@ public class KeyExchangeController : ControllerBase
     /// Each partner calls this to get other partners' keys.
     /// </summary>
     [HttpGet("keys")]
-    public async Task<IActionResult> GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
+    [ProducesResponseType(typeof(KeyExchangeResponse), 200)]
+    public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
     {
         var allKeys = await _keyRepo.GetAllKeysAsync();
 
@@ -100,7 +104,9 @@ public class KeyExchangeController : ControllerBase
     /// Get a specific partner's public key.
     /// </summary>
     [HttpGet("keys/{producerId}")]
-    public async Task<IActionResult> GetPublicKey(string producerId)
+    [ProducesResponseType(typeof(PartnerPublicKey), 200)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<PartnerPublicKey>> GetPublicKey(string producerId)
     {
         var key = await _keyRepo.GetKeyAsync(producerId);
 
@@ -117,7 +123,8 @@ public class KeyExchangeController : ControllerBase
     /// Submissions should only start after key exchange is complete.
     /// </summary>
     [HttpGet("status")]
-    public async Task<IActionResult> GetKeyExchangeStatus()
+    [ProducesResponseType(typeof(KeyExchangeStatusResponse), 200)]
+    public async Task<ActionResult<KeyExchangeStatusResponse>> GetKeyExchangeStatus()
     {
         var registeredKeys = await _keyRepo.GetAllKeysAsync();
         var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
@@ -127,13 +134,13 @@ public class KeyExchangeController : ControllerBase
         var expectedPartners = new[] { "partnerA", "partnerB", "partnerC" };
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
 
-        return Ok(new
+        return Ok(new KeyExchangeStatusResponse
         {
-            isComplete = !missingKeys.Any(),
-            registeredCount = registeredKeys.Count,
-            expectedCount = expectedPartners.Length,
-            registeredPartners = registeredIds.ToList(),
-            missingPartners = missingKeys
+            IsComplete = !missingKeys.Any(),
+            RegisteredCount = registeredKeys.Count,
+            ExpectedCount = expectedPartners.Length,
+            RegisteredPartners = registeredIds.ToList(),
+            MissingPartners = missingKeys
         });
     }
 }

@@ -86,10 +86,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
             modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.ProducerEpoch", b =>
                 {
                     b.Property<int>("EpochId")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("EpochId"));
 
                     b.Property<DateTime?>("EndDate")
                         .HasColumnType("datetime2");

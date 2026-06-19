@@ -8,8 +8,8 @@ public key is (re-)posted to the API so the script is safe to run multiple times
 Usage:
     python keygen.py
 
-Configuration is read from config.json in the same directory.
-Copy config.json.example to config.json and fill in your credentials first.
+Configuration is read from a .env file in the same directory.
+Copy .env.example to .env and fill in your credentials first.
 """
 
 import base64
@@ -17,23 +17,30 @@ import json
 import os
 import sys
 
-import oqs
+from dotenv import load_dotenv
+from kyber_py.kyber import Kyber768
 import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 KEYS_DIR = os.path.join(SCRIPT_DIR, "keys")
 
 
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
+    env_file = os.path.join(SCRIPT_DIR, ".env")
+    if not os.path.exists(env_file):
         print(
-            "ERROR: config.json not found.\n"
-            "       Copy config.json.example to config.json and fill in your credentials."
+            "ERROR: .env not found.\n"
+            "       Copy .env.example to .env and fill in your credentials."
         )
         sys.exit(1)
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
+    load_dotenv(env_file)
+    required = ["API_BASE_URL", "CLIENT_ID", "CLIENT_SECRET"]
+    config = {key: os.getenv(key) for key in required}
+    missing = [k for k, v in config.items() if not v]
+    if missing:
+        print(f"ERROR: Missing required .env variables: {', '.join(missing)}")
+        sys.exit(1)
+    return config
 
 
 def get_token(api_base_url, client_id, client_secret):
@@ -51,10 +58,10 @@ def get_token(api_base_url, client_id, client_secret):
 
 def main():
     config = load_config()
-    api_base_url = config["api_base_url"].rstrip("/")
-    producer_id = config["producer_id"]
-    client_id = config["client_id"]
-    client_secret = config["client_secret"]
+    api_base_url = config["API_BASE_URL"].rstrip("/")
+    client_id = config["CLIENT_ID"]
+    client_secret = config["CLIENT_SECRET"]
+    producer_id = client_id
 
     os.makedirs(KEYS_DIR, exist_ok=True)
     key_file = os.path.join(KEYS_DIR, f"{producer_id}.json")
@@ -66,9 +73,7 @@ def main():
         public_key_b64 = key_data["public_key_b64"]
     else:
         print("Generating new ML-KEM-768 keypair...")
-        with oqs.KeyEncapsulation("Kyber768") as kem:
-            public_key = kem.generate_keypair()
-            secret_key = kem.export_secret_key()
+        public_key, secret_key = Kyber768.keygen()  # pk: 1184 bytes, sk: 2400 bytes
 
         public_key_b64 = base64.b64encode(public_key).decode()
         secret_key_b64 = base64.b64encode(secret_key).decode()

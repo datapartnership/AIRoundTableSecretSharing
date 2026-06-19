@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 
@@ -25,7 +26,10 @@ public class AuthController : ControllerBase
     /// </summary>
     [HttpPost("token")]
     [Consumes("application/x-www-form-urlencoded")]
-    public IActionResult Token(
+    [ProducesResponseType(typeof(TokenResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(401)]
+    public ActionResult<TokenResponse> Token(
         [FromForm(Name = "grant_type")] string grantType,
         [FromForm(Name = "client_id")] string clientId,
         [FromForm(Name = "client_secret")] string clientSecret)
@@ -48,11 +52,11 @@ public class AuthController : ControllerBase
 
         _logger.LogInformation("Issued token for client_id={ClientId}", clientId);
 
-        return Ok(new
+        return Ok(new TokenResponse
         {
-            access_token = token,
-            token_type = "Bearer",
-            expires_in = expiryMinutes * 60
+            AccessToken = token,
+            TokenType = "Bearer",
+            ExpiresIn = expiryMinutes * 60
         });
     }
 
@@ -61,16 +65,19 @@ public class AuthController : ControllerBase
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var adminUser = _config["AdminUser"];
+        var claims = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, clientId),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
         };
+        if (!string.IsNullOrEmpty(adminUser) && clientId == adminUser)
+            claims.Add(new Claim("role", "admin"));
 
         var token = new JwtSecurityToken(
             issuer: _config["Jwt:Issuer"],
             audience: _config["Jwt:Audience"],
-            claims: claims,
+            claims: claims.ToArray(),
             expires: DateTime.UtcNow.AddMinutes(expiryMinutes),
             signingCredentials: credentials
         );
