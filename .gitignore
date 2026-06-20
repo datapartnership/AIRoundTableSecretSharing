@@ -91,3 +91,4 @@ publish-profiles/
 **/Migrations/*.Designer.cs
 node_modules/
 dist/
+test.http
