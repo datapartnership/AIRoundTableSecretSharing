@@ -44,3 +44,12 @@ public class ProducerSubmissionsResponse
     public int EpochId { get; set; }
     public List<SubmittedEntry> Submissions { get; set; } = new();
 }
+
+public class LatestEpochAggregatesResponse
+{
+    public int EpochId { get; set; }
+    public DateTime StartDate { get; set; }
+    public int PartnerCount { get; set; }
+    public List<string> Partners { get; set; } = new();
+    public List<AggregationResult> Aggregates { get; set; } = new();
+}

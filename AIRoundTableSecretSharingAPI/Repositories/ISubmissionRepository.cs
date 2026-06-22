@@ -13,5 +13,10 @@ public interface ISubmissionRepository
 
     Task<List<MetricSubmission>> GetSubmissionsByProducerAsync(string producerId, int epochId);
 
+    /// <summary>
+    /// Retrieves all distinct (country, month) pairs that have submissions in the given epoch.
+    /// </summary>
+    Task<List<(string country, string month)>> GetDistinctCountryMonthPairsAsync(int epochId);
+
     Task ClearAllAsync();
 }

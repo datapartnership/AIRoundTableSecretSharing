@@ -36,6 +36,14 @@ public class EfSubmissionRepository : ISubmissionRepository
             .Where(s => s.ProducerId == producerId && s.EpochId == epochId)
             .ToListAsync();
 
+    public async Task<List<(string country, string month)>> GetDistinctCountryMonthPairsAsync(int epochId) =>
+        await _db.Submissions
+            .Where(s => s.EpochId == epochId)
+            .Select(s => new { s.Country, s.Month })
+            .Distinct()
+            .ToListAsync()
+            .ContinueWith(task => task.Result.Select(x => (x.Country, x.Month)).ToList());
+
     public async Task ClearAllAsync()
     {
         _db.Submissions.RemoveRange(_db.Submissions);
