@@ -20,6 +20,24 @@ public class AddProducerResponse
     public ProducerEpoch Epoch { get; set; } = null!;
 }
 
+public class ReplaceProducersRequest
+{
+    public List<ReplaceProducerItem> Producers { get; set; } = new();
+}
+
+public class ReplaceProducerItem
+{
+    public string ProducerId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public class ReplaceProducersResponse
+{
+    public string Message { get; set; } = string.Empty;
+    public ProducerEpoch Epoch { get; set; } = null!;
+    public List<string> Producers { get; set; } = new();
+}
+
 public class KeyExchangeStatusResponse
 {
     public bool IsComplete { get; set; }

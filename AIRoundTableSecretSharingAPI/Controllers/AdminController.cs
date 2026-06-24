@@ -1,5 +1,6 @@
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
+using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,6 +12,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/admin")]
 public class AdminController : ControllerBase
 {
+    private readonly AppDbContext _db;
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
     private readonly IKeyRepository _keyRepo;
@@ -18,12 +20,14 @@ public class AdminController : ControllerBase
     private readonly ILogger<AdminController> _logger;
 
     public AdminController(
+        AppDbContext db,
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
         IKeyRepository keyRepo,
         ICiphertextRepository ciphertextRepo,
         ILogger<AdminController> logger)
     {
+        _db = db;
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
         _keyRepo = keyRepo;
@@ -66,6 +70,109 @@ public class AdminController : ControllerBase
         _logger.LogInformation("Database reset complete. Re-seeded 3 producers and epoch 1.");
 
         return Ok(new MessageResponse { Message = "Database reset to initial state." });
+    }
+
+    /// <summary>
+    /// Replaces all producers with the submitted list and creates a fresh epoch.
+    /// Also clears submissions, keys, and ciphertexts to ensure protocol consistency.
+    /// Epoch start date is normalized to the first day of next month.
+    /// </summary>
+    [HttpPost("producers/reset-and-create-epoch")]
+    [ProducesResponseType(typeof(ReplaceProducersResponse), 200)]
+    [ProducesResponseType(400)]
+    public async Task<ActionResult<ReplaceProducersResponse>> ResetAndCreateEpoch([FromBody] ReplaceProducersRequest request)
+    {
+        if (request.Producers == null || request.Producers.Count < 2)
+            return BadRequest(new { error = "At least 2 producers are required." });
+
+        var normalizedProducers = request.Producers
+            .Select(p => new ReplaceProducerItem
+            {
+                ProducerId = p.ProducerId.Trim(),
+                DisplayName = p.DisplayName.Trim()
+            })
+            .ToList();
+
+        if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ProducerId) || string.IsNullOrWhiteSpace(p.DisplayName)))
+            return BadRequest(new { error = "Each producer must include non-empty producerId and displayName." });
+
+        var duplicateIds = normalizedProducers
+            .GroupBy(p => p.ProducerId, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .OrderBy(x => x)
+            .ToList();
+
+        if (duplicateIds.Count > 0)
+            return BadRequest(new { error = "Duplicate producerId values are not allowed.", duplicateProducerIds = duplicateIds });
+
+        _logger.LogWarning(
+            "Admin producer replacement initiated by {User}. New producer count: {Count}",
+            User.Identity?.Name ?? "unknown",
+            normalizedProducers.Count);
+
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            await _submissionRepo.ClearAllAsync();
+            await _ciphertextRepo.ClearAsync();
+            await _keyRepo.ClearAsync();
+            await _producerRepo.ClearAllAsync();
+
+            var startDate = FirstDayOfNextMonthUtc();
+
+            foreach (var item in normalizedProducers)
+            {
+                await _producerRepo.AddProducerAsync(new ProducerInfo
+                {
+                    ProducerId = item.ProducerId,
+                    DisplayName = item.DisplayName,
+                    JoinedDate = startDate,
+                    IsActive = true
+                });
+            }
+
+            var sortedProducerIds = normalizedProducers
+                .Select(p => p.ProducerId)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+
+            var epoch = new ProducerEpoch
+            {
+                EpochId = 1,
+                StartDate = startDate,
+                EndDate = null,
+                ProducerIds = sortedProducerIds,
+                ProducerCount = sortedProducerIds.Count
+            };
+
+            await _producerRepo.AddEpochAsync(epoch);
+            await tx.CommitAsync();
+
+            _logger.LogInformation(
+                "Producer replacement complete. Created epoch {EpochId} effective {StartDate} with {Count} producers.",
+                epoch.EpochId,
+                epoch.StartDate,
+                epoch.ProducerCount);
+
+            return Ok(new ReplaceProducersResponse
+            {
+                Message = "Producers replaced and new epoch created.",
+                Epoch = epoch,
+                Producers = sortedProducerIds
+            });
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            throw;
+        }
+    }
+
+    private static DateTime FirstDayOfNextMonthUtc()
+    {
+        var now = DateTime.UtcNow;
+        return new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1);
     }
 
     /// <summary>
