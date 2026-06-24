@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using AIRoundTableSecretSharingAPI.Models;
+using AIRoundTableSecretSharingAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 
@@ -12,11 +13,16 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IConfiguration _config;
+    private readonly IClientCredentialService _credentialService;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IConfiguration config, ILogger<AuthController> logger)
+    public AuthController(
+        IConfiguration config,
+        IClientCredentialService credentialService,
+        ILogger<AuthController> logger)
     {
         _config = config;
+        _credentialService = credentialService;
         _logger = logger;
     }
 
@@ -29,7 +35,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(typeof(TokenResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(401)]
-    public ActionResult<TokenResponse> Token(
+    public async Task<ActionResult<TokenResponse>> Token(
         [FromForm(Name = "grant_type")] string grantType,
         [FromForm(Name = "client_id")] string clientId,
         [FromForm(Name = "client_secret")] string clientSecret)
@@ -37,10 +43,7 @@ public class AuthController : ControllerBase
         if (grantType != "client_credentials")
             return BadRequest(new { error = "unsupported_grant_type" });
 
-        var clients = _config.GetSection("ClientCredentials").Get<Dictionary<string, string>>();
-
-        if (clients == null || !clients.TryGetValue(clientId, out var expectedSecret)
-            || expectedSecret != clientSecret)
+        if (!await _credentialService.ValidateClientAsync(clientId, clientSecret, HttpContext.RequestAborted))
         {
             _logger.LogWarning("Failed token request for client_id={ClientId} from {RemoteIp}",
                 clientId, HttpContext.Connection.RemoteIpAddress);

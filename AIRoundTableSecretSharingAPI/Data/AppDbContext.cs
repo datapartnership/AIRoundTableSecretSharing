@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
@@ -15,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<MetricSubmission> Submissions => Set<MetricSubmission>();
     public DbSet<PartnerPublicKey> PublicKeys => Set<PartnerPublicKey>();
     public DbSet<PartnerCiphertext> Ciphertexts => Set<PartnerCiphertext>();
+    public DbSet<ClientCredential> ClientCredentials => Set<ClientCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -74,6 +76,13 @@ public class AppDbContext : DbContext
             e.Property(c => c.SenderId).HasMaxLength(100);
             e.Property(c => c.RecipientId).HasMaxLength(100);
             e.Property(c => c.CiphertextBase64).HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<ClientCredential>(e =>
+        {
+            e.HasKey(c => c.ClientId);
+            e.Property(c => c.ClientId).HasMaxLength(100);
+            e.Property(c => c.ClientSecret).HasColumnType("nvarchar(max)");
         });
     }
 }

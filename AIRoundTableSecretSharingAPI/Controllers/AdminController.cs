@@ -2,6 +2,7 @@ using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingCommon.Models;
+using AIRoundTableSecretSharingAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,6 +18,7 @@ public class AdminController : ControllerBase
     private readonly ISubmissionRepository _submissionRepo;
     private readonly IKeyRepository _keyRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
+    private readonly IClientCredentialService _credentialService;
     private readonly ILogger<AdminController> _logger;
 
     public AdminController(
@@ -25,6 +27,7 @@ public class AdminController : ControllerBase
         ISubmissionRepository submissionRepo,
         IKeyRepository keyRepo,
         ICiphertextRepository ciphertextRepo,
+        IClientCredentialService credentialService,
         ILogger<AdminController> logger)
     {
         _db = db;
@@ -32,6 +35,7 @@ public class AdminController : ControllerBase
         _submissionRepo = submissionRepo;
         _keyRepo = keyRepo;
         _ciphertextRepo = ciphertextRepo;
+        _credentialService = credentialService;
         _logger = logger;
     }
 
@@ -49,6 +53,7 @@ public class AdminController : ControllerBase
         await _ciphertextRepo.ClearAsync();
         await _keyRepo.ClearAsync();
         await _producerRepo.ClearAllAsync();
+        await _credentialService.ResetToConfiguredCredentialsAsync(HttpContext.RequestAborted);
 
         var startDate = new DateTime(2025, 1, 1);
 
@@ -85,16 +90,23 @@ public class AdminController : ControllerBase
         if (request.Producers == null || request.Producers.Count < 2)
             return BadRequest(new { error = "At least 2 producers are required." });
 
+        if (!TryResolveEpochStartDate(request.StartMonth, out var startDate))
+            return BadRequest(new { error = "startMonth must be in YYYY-MM format (e.g. 2025-01)." });
+
         var normalizedProducers = request.Producers
             .Select(p => new ReplaceProducerItem
             {
                 ProducerId = p.ProducerId.Trim(),
-                DisplayName = p.DisplayName.Trim()
+                DisplayName = p.DisplayName.Trim(),
+                ClientSecret = p.ClientSecret.Trim()
             })
             .ToList();
 
         if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ProducerId) || string.IsNullOrWhiteSpace(p.DisplayName)))
             return BadRequest(new { error = "Each producer must include non-empty producerId and displayName." });
+
+        if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ClientSecret)))
+            return BadRequest(new { error = "Each producer must include a non-empty clientSecret." });
 
         var duplicateIds = normalizedProducers
             .GroupBy(p => p.ProducerId, StringComparer.OrdinalIgnoreCase)
@@ -119,8 +131,6 @@ public class AdminController : ControllerBase
             await _keyRepo.ClearAsync();
             await _producerRepo.ClearAllAsync();
 
-            var startDate = FirstDayOfNextMonthUtc();
-
             foreach (var item in normalizedProducers)
             {
                 await _producerRepo.AddProducerAsync(new ProducerInfo
@@ -131,6 +141,10 @@ public class AdminController : ControllerBase
                     IsActive = true
                 });
             }
+
+            await _credentialService.ReplaceProducerCredentialsAsync(
+                normalizedProducers.Select(p => (p.ProducerId, p.ClientSecret)),
+                HttpContext.RequestAborted);
 
             var sortedProducerIds = normalizedProducers
                 .Select(p => p.ProducerId)
@@ -171,8 +185,34 @@ public class AdminController : ControllerBase
 
     private static DateTime FirstDayOfNextMonthUtc()
     {
+        // Note: This is used for AddProducer endpoint which normalizes to next month.
+        // ResetAndCreateEpoch resolves the epoch to the first day of the requested month.
         var now = DateTime.UtcNow;
         return new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1);
+    }
+
+    private static bool TryResolveEpochStartDate(string? startMonth, out DateTime startDate)
+    {
+        if (string.IsNullOrWhiteSpace(startMonth))
+        {
+            var now = DateTime.UtcNow;
+            startDate = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            return true;
+        }
+
+        if (DateTime.TryParseExact(
+                startMonth,
+                "yyyy-MM",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsedMonth))
+        {
+            startDate = new DateTime(parsedMonth.Year, parsedMonth.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            return true;
+        }
+
+        startDate = default;
+        return false;
     }
 
     /// <summary>

@@ -22,6 +22,7 @@ public class AddProducerResponse
 
 public class ReplaceProducersRequest
 {
+    public string? StartMonth { get; set; }
     public List<ReplaceProducerItem> Producers { get; set; } = new();
 }
 
@@ -29,6 +30,7 @@ public class ReplaceProducerItem
 {
     public string ProducerId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+    public string ClientSecret { get; set; } = string.Empty;
 }
 
 public class ReplaceProducersResponse

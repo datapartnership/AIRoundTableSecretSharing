@@ -1,6 +1,7 @@
 using System.Text;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
+using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -50,6 +51,7 @@ builder.Services.AddScoped<IProducerRepository, EfProducerRepository>();
 builder.Services.AddScoped<ISubmissionRepository, EfSubmissionRepository>();
 builder.Services.AddScoped<IKeyRepository, EfKeyRepository>();
 builder.Services.AddScoped<ICiphertextRepository, EfCiphertextRepository>();
+builder.Services.AddScoped<IClientCredentialService, DbClientCredentialService>();
 
 var app = builder.Build();
 
@@ -77,6 +79,24 @@ using (var scope = app.Services.CreateScope())
         });
         await db.SaveChangesAsync();
         Console.WriteLine("Seeded 3 producers and initial epoch");
+    }
+
+    if (!db.ClientCredentials.Any())
+    {
+        var initialCredentials = builder.Configuration.GetSection("ClientCredentials").Get<Dictionary<string, string>>()
+            ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var pair in initialCredentials)
+        {
+            db.ClientCredentials.Add(new AIRoundTableSecretSharingAPI.Models.ClientCredential
+            {
+                ClientId = pair.Key,
+                ClientSecret = pair.Value
+            });
+        }
+
+        await db.SaveChangesAsync();
+        Console.WriteLine($"Seeded {initialCredentials.Count} client credentials");
     }
 }
 

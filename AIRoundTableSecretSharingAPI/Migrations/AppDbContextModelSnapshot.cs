@@ -22,6 +22,21 @@ namespace AIRoundTableSecretSharingAPI.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("AIRoundTableSecretSharingAPI.Models.ClientCredential", b =>
+                {
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("ClientSecret")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("ClientId");
+
+                    b.ToTable("ClientCredentials");
+                });
+
             modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.MetricSubmission", b =>
                 {
                     b.Property<int>("Id")
