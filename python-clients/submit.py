@@ -11,14 +11,10 @@ For each row in submissions.csv, applies HMAC noise derived from the shared
 secrets established by exchange.py and posts the masked value to the API.
 Rows with an empty value are skipped.
 
-Noise formula (self-consistent among Python producers):
+Noise formula (compatible with C# SecureNoiseGenerator):
   h    = HMAC-SHA256(key=shared_secret, msg="{country}|{YYYY-MM}")
   seed = little-endian signed int64 from first 8 bytes of h
   noise = (seed % (2*MAX_NOISE + 1)) - MAX_NOISE
-
-NOTE: this formula is NOT compatible with the C# SecureNoiseGenerator, which uses
-.NET System.Random internally. Mixed Python+C# deployments require updating the
-C# formula as well.
 
 Usage:
     python submit.py

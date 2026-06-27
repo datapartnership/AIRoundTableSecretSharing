@@ -4,8 +4,9 @@ using System.Text;
 namespace AIRoundTableSecretSharingCommon.Core;
 
 /// <summary>
-/// Generates cryptographically secure noise using Diffie-Hellman shared secrets.
+/// Generates cryptographically secure noise using ML-KEM shared secrets.
 /// The aggregator CANNOT compute this noise because it doesn't know the shared secrets.
+/// Compatible with the Python submit.py noise formula.
 /// </summary>
 public static class SecureNoiseGenerator
 {
@@ -29,12 +30,13 @@ public static class SecureNoiseGenerator
         using var hmac = new HMACSHA256(sharedSecret);
         var hash = hmac.ComputeHash(contextBytes);
         
-        // Convert first 8 bytes to a seed
+        // Signed little-endian int64 from first 8 bytes — matches Python
+        // struct.unpack("<q", h[:8])[0]. Use Python-style modulo (always
+        // non-negative) so both runtimes produce identical noise values.
         var seed = BitConverter.ToInt64(hash, 0);
-        
-        // Generate noise in range [-maxNoise, maxNoise]
-        var random = new Random((int)(seed & 0x7FFFFFFF));
-        return random.NextInt64(-maxNoise, maxNoise + 1);
+        var noiseRange = 2 * maxNoise + 1;
+        var mod = ((seed % noiseRange) + noiseRange) % noiseRange;
+        return mod - maxNoise;
     }
     
     /// <summary>
