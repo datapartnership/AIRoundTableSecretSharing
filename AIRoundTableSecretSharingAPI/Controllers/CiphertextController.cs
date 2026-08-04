@@ -13,7 +13,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 /// Only the intended recipient — who holds the decapsulation key — can recover the shared secret.
 /// </summary>
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class CiphertextController : ControllerBase
 {

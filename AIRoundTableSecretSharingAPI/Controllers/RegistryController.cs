@@ -9,7 +9,7 @@ using AIRoundTableSecretSharingCommon.Models;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class RegistryController : ControllerBase
 {

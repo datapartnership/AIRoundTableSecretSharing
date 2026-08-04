@@ -1,11 +1,9 @@
-using System.Text;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
+using Microsoft.Identity.Web;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -24,25 +22,18 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddAuthorization(options =>
-    options.AddPolicy("AdminOnly", policy => policy.RequireClaim("role", "admin")));
+{
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireClaim("groups", builder.Configuration["AzureAd:AdminGroupId"]!));
+    // Admins are also permitted on partner endpoints
+    options.AddPolicy("Partner", policy =>
+        policy.RequireClaim("groups",
+            builder.Configuration["AzureAd:PartnerGroupId"]!,
+            builder.Configuration["AzureAd:AdminGroupId"]!));
+});
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        // Keep claim names exactly as issued (prevents "role" → ClaimTypes.Role remapping)
-        options.MapInboundClaims = false;
-        var jwtKey = builder.Configuration["Jwt:Key"]!;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
-        };
-    });
+builder.Services.AddAuthentication()
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -79,24 +70,6 @@ using (var scope = app.Services.CreateScope())
         });
         await db.SaveChangesAsync();
         Console.WriteLine("Seeded 3 producers and initial epoch");
-    }
-
-    if (!db.ClientCredentials.Any())
-    {
-        var initialCredentials = builder.Configuration.GetSection("ClientCredentials").Get<Dictionary<string, string>>()
-            ?? new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var pair in initialCredentials)
-        {
-            db.ClientCredentials.Add(new AIRoundTableSecretSharingAPI.Models.ClientCredential
-            {
-                ClientId = pair.Key,
-                ClientSecret = pair.Value
-            });
-        }
-
-        await db.SaveChangesAsync();
-        Console.WriteLine($"Seeded {initialCredentials.Count} client credentials");
     }
 }
 

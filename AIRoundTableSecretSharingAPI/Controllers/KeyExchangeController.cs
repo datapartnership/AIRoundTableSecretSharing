@@ -14,7 +14,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 /// The aggregator cannot recover any shared secret from the keys it stores.
 /// </summary>
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class KeyExchangeController : ControllerBase
 {

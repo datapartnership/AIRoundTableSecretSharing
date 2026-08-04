@@ -1,26 +1,23 @@
+import { InteractionRequiredAuthError } from '@azure/msal-browser'
+import { apiTokenRequest } from '../authConfig'
+
 const API_BASE = '/api';
 
 /**
- * Obtain a Bearer token via OAuth 2.0 client credentials flow.
- * Returns the access_token string.
+ * Acquire an API access token via MSAL, falling back to a popup when silent
+ * acquisition requires user interaction.
  */
-export async function getToken(clientId, clientSecret) {
-  const body = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-  });
-  const response = await fetch('/auth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || 'Authentication failed');
+export async function acquireApiToken(msalInstance, account) {
+  try {
+    const result = await msalInstance.acquireTokenSilent({ ...apiTokenRequest, account })
+    return result.accessToken
+  } catch (e) {
+    if (e instanceof InteractionRequiredAuthError) {
+      const result = await msalInstance.acquireTokenPopup({ ...apiTokenRequest, account })
+      return result.accessToken
+    }
+    throw e
   }
-  const data = await response.json();
-  return data.access_token;
 }
 
 function buildHeaders(token, contentType = null) {

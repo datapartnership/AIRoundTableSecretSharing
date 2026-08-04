@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class MetricsController : ControllerBase
 {
