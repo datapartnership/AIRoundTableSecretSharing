@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -44,10 +46,11 @@ public class KeyExchangeController : ControllerBase
     [ProducesResponseType(400)]
     public async Task<ActionResult<MessageResponse>> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
-        if (string.IsNullOrEmpty(request.ProducerId) || string.IsNullOrEmpty(request.PublicKeyBase64))
-        {
-            return BadRequest("ProducerId and PublicKeyBase64 are required");
-        }
+        // Identity comes from the token; body field is ignored
+        request.ProducerId = User.FindFirstValue("oid")!;
+
+        if (string.IsNullOrEmpty(request.PublicKeyBase64))
+            return BadRequest("PublicKeyBase64 is required");
 
         // Validate the public key format — ML-KEM-768 encapsulation keys are exactly 1184 bytes
         try

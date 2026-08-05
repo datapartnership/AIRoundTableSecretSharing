@@ -1,147 +1,31 @@
-/**
- * Diffie-Hellman Key Exchange using Web Crypto API (ECDH P-256)
- * This provides cryptographically secure key exchange that the aggregator cannot compute.
- */
+import { MlKem768 } from 'mlkem'
 
-// Store key pairs in memory (in production, use secure storage)
-const keyPairs = new Map();
-const sharedSecrets = new Map();
-
-/**
- * Generate an ECDH P-256 key pair for a partner
- */
-export async function generateKeyPair(partnerId) {
-  const keyPair = await crypto.subtle.generateKey(
-    {
-      name: 'ECDH',
-      namedCurve: 'P-256',
-    },
-    true, // extractable - needed to export public key
-    ['deriveBits']
-  );
-  
-  keyPairs.set(partnerId, keyPair);
-  return keyPair;
+export function bytesToBase64(bytes) {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return btoa(bin)
 }
 
-/**
- * Export public key as base64 string (for sending to aggregator)
- */
-export async function exportPublicKey(partnerId) {
-  const keyPair = keyPairs.get(partnerId);
-  if (!keyPair) {
-    throw new Error(`No key pair found for ${partnerId}`);
-  }
-  
-  const exported = await crypto.subtle.exportKey('spki', keyPair.publicKey);
-  return btoa(String.fromCharCode(...new Uint8Array(exported)));
+export function base64ToBytes(b64) {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
 }
 
-/**
- * Import a public key from base64 string (received from aggregator)
- */
-export async function importPublicKey(publicKeyBase64) {
-  const binaryString = atob(publicKeyBase64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  
-  return crypto.subtle.importKey(
-    'spki',
-    bytes,
-    {
-      name: 'ECDH',
-      namedCurve: 'P-256',
-    },
-    true,
-    []
-  );
+// ML-KEM-768: ek = 1184 bytes (public), dk = 2400 bytes (private)
+export async function generateMlKemKeyPair() {
+  const [ek, dk] = await new MlKem768().generateKeyPair()
+  return { ekBase64: bytesToBase64(ek), dkBase64: bytesToBase64(dk) }
 }
 
-/**
- * Compute shared secret with another partner using ECDH
- * This is the key insight: the aggregator CANNOT compute this!
- */
-export async function computeSharedSecret(myPartnerId, otherPartnerId, otherPublicKeyBase64) {
-  const myKeyPair = keyPairs.get(myPartnerId);
-  if (!myKeyPair) {
-    throw new Error(`No key pair found for ${myPartnerId}`);
-  }
-  
-  const otherPublicKey = await importPublicKey(otherPublicKeyBase64);
-  
-  // Derive shared secret using ECDH
-  const sharedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'ECDH',
-      public: otherPublicKey,
-    },
-    myKeyPair.privateKey,
-    256 // 256 bits = 32 bytes
-  );
-  
-  // Store the shared secret
-  const secretKey = getSecretKey(myPartnerId, otherPartnerId);
-  sharedSecrets.set(secretKey, new Uint8Array(sharedBits));
-  
-  return new Uint8Array(sharedBits);
+// Returns { ctBase64: string, sharedSecret: Uint8Array }
+export async function encapsulate(partnerEkBase64) {
+  const [ct, ss] = await new MlKem768().encap(base64ToBytes(partnerEkBase64))
+  return { ctBase64: bytesToBase64(ct), sharedSecret: ss }
 }
 
-/**
- * Get a consistent key for storing shared secrets (order-independent)
- */
-function getSecretKey(id1, id2) {
-  const sorted = [id1, id2].sort();
-  return `${sorted[0]}|${sorted[1]}`;
-}
-
-/**
- * Retrieve a previously computed shared secret
- */
-export function getSharedSecret(myPartnerId, otherPartnerId) {
-  const secretKey = getSecretKey(myPartnerId, otherPartnerId);
-  return sharedSecrets.get(secretKey);
-}
-
-/**
- * Check if we have a key pair for a partner
- */
-export function hasKeyPair(partnerId) {
-  return keyPairs.has(partnerId);
-}
-
-/**
- * Check if we have a shared secret with another partner
- */
-export function hasSharedSecret(myPartnerId, otherPartnerId) {
-  const secretKey = getSecretKey(myPartnerId, otherPartnerId);
-  return sharedSecrets.has(secretKey);
-}
-
-/**
- * Clear all keys (for testing/reset)
- */
-export function clearAllKeys() {
-  keyPairs.clear();
-  sharedSecrets.clear();
-}
-
-/**
- * Get key exchange status for a partner
- */
-export function getKeyExchangeStatus(partnerId, allPartnerIds) {
-  const hasOwnKey = hasKeyPair(partnerId);
-  const otherPartners = allPartnerIds.filter(id => id !== partnerId);
-  const completedExchanges = otherPartners.filter(otherId => 
-    hasSharedSecret(partnerId, otherId)
-  );
-  
-  return {
-    hasOwnKeyPair: hasOwnKey,
-    totalPartners: otherPartners.length,
-    completedExchanges: completedExchanges.length,
-    isComplete: hasOwnKey && completedExchanges.length === otherPartners.length,
-    pendingPartners: otherPartners.filter(id => !hasSharedSecret(partnerId, id))
-  };
+// Returns Uint8Array (32-byte shared secret)
+export async function decapsulate(ctBase64, dkBase64) {
+  return new MlKem768().decap(base64ToBytes(ctBase64), base64ToBytes(dkBase64))
 }

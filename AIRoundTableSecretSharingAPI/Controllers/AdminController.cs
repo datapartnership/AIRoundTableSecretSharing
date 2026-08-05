@@ -55,26 +55,9 @@ public class AdminController : ControllerBase
         await _producerRepo.ClearAllAsync();
         await _credentialService.ResetToConfiguredCredentialsAsync(HttpContext.RequestAborted);
 
-        var startDate = new DateTime(2025, 1, 1);
+        _logger.LogInformation("Database reset complete. All data cleared.");
 
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerA", DisplayName = "Partner A", JoinedDate = startDate, IsActive = true });
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerB", DisplayName = "Partner B", JoinedDate = startDate, IsActive = true });
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerC", DisplayName = "Partner C", JoinedDate = startDate, IsActive = true });
-
-        // CreateEpochAsync closes any open epoch first — since we just cleared, add directly
-        var epoch = new ProducerEpoch
-        {
-            EpochId = 1,
-            StartDate = startDate,
-            EndDate = null,
-            ProducerIds = new List<string> { "partnerA", "partnerB", "partnerC" },
-            ProducerCount = 3
-        };
-        await _producerRepo.AddEpochAsync(epoch);
-
-        _logger.LogInformation("Database reset complete. Re-seeded 3 producers and epoch 1.");
-
-        return Ok(new MessageResponse { Message = "Database reset to initial state." });
+        return Ok(new MessageResponse { Message = "Database cleared." });
     }
 
     /// <summary>
