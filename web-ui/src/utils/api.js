@@ -1,7 +1,7 @@
 import { InteractionRequiredAuthError } from '@azure/msal-browser'
 import { apiTokenRequest } from '../authConfig'
 
-const BASE = '/api'
+const BASE = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')}/api`
 
 export async function acquireApiToken(msalInstance, account) {
   try {
