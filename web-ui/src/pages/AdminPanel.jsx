@@ -12,9 +12,8 @@ export default function AdminPanel() {
   const [regLoading, setRegLoading] = useState(false)
   const [regError, setRegError] = useState(null)
 
-  // selected OIDs + their clientSecret values
+  // selected OIDs
   const [selected, setSelected] = useState(new Set())
-  const [secrets, setSecrets] = useState({})            // producerId → clientSecret
 
   // ── Epoch creation ──────────────────────────────────────────────────────────
   const [startMonth, setStartMonth] = useState(() => {
@@ -89,13 +88,12 @@ export default function AdminPanel() {
     try {
       const producers = [...selected].map((id) => {
         const p = registered.find((r) => r.producerId === id)
-        return { producerId: id, displayName: p?.displayName ?? id, clientSecret: secrets[id] ?? '' }
+        return { producerId: id, displayName: p?.displayName ?? id }
       })
       const token = await api.acquireApiToken(instance, account)
       const data = await api.adminResetAndCreateEpoch({ startMonth, producers }, token)
       setEpochResult(data)
       setSelected(new Set())
-      setSecrets({})
       loadRegistered()
       loadAggregates()
     } catch (e) {
@@ -113,7 +111,6 @@ export default function AdminPanel() {
       await api.adminReset(token)
       setRegistered([])
       setSelected(new Set())
-      setSecrets({})
       setAggregates(null)
     } catch (e) {
       setRegError(e.message)
@@ -125,7 +122,7 @@ export default function AdminPanel() {
 
   const allSelected = registered.length > 0 && selected.size === registered.length
   const selectedList = registered.filter((p) => selected.has(p.producerId))
-  const canCreateEpoch = selected.size >= 2 && selectedList.every((p) => (secrets[p.producerId] ?? '').trim())
+  const canCreateEpoch = selected.size >= 2
 
   return (
     <div className="animate-fade-in">
@@ -230,20 +227,8 @@ export default function AdminPanel() {
             Select at least 2 partners above to continue.
           </div>
         ) : (
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ color: '#d4d4d8', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Client Secrets for {selected.size} selected partner{selected.size !== 1 ? 's' : ''}
-            </div>
-            {selectedList.map((p) => (
-              <div key={p.producerId} style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
-                <span style={{ color: '#a1a1aa', fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.displayName}
-                </span>
-                <input className="form-input" type="password" placeholder="Client secret"
-                  value={secrets[p.producerId] ?? ''}
-                  onChange={(e) => setSecrets((s) => ({ ...s, [p.producerId]: e.target.value }))} />
-              </div>
-            ))}
+          <div style={{ marginBottom: '1rem', color: '#a1a1aa', fontSize: '0.875rem' }}>
+            {selected.size} partner{selected.size !== 1 ? 's' : ''} selected: {selectedList.map(p => p.displayName).join(', ')}
           </div>
         )}
 

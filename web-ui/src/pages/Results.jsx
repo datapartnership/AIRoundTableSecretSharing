@@ -1,19 +1,41 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMsal } from '@azure/msal-react'
 import * as api from '../utils/api'
 
 const COUNTRIES = ['US', 'GB', 'DE']
-const MONTHS = ['2026-06', '2026-07', '2026-08']
+
+function epochMonths(epoch) {
+  if (!epoch?.startDate) return []
+  return Array.from({ length: 3 }, (_, i) => {
+    const d = new Date(epoch.startDate)
+    d.setUTCMonth(d.getUTCMonth() + i)
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+  })
+}
 
 export default function Results() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
 
+  const [epoch, setEpoch] = useState(null)
   const [country, setCountry] = useState(COUNTRIES[0])
-  const [month, setMonth] = useState(MONTHS[0])
+  const [month, setMonth] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  useEffect(() => {
+    api.acquireApiToken(instance, account)
+      .then(token => api.getEpoch(token))
+      .then(ep => {
+        setEpoch(ep)
+        const months = epochMonths(ep)
+        if (months.length) setMonth(months[0])
+      })
+      .catch(() => {})
+  }, [])
+
+  const months = epochMonths(epoch)
 
   const fetchResult = async () => {
     setLoading(true)
@@ -52,7 +74,7 @@ export default function Results() {
           <div className="form-group">
             <label className="form-label">Month</label>
             <select className="form-select" value={month} onChange={(e) => setMonth(e.target.value)}>
-              {MONTHS.map((m) => <option key={m}>{m}</option>)}
+              {months.map((m) => <option key={m}>{m}</option>)}
             </select>
           </div>
         </div>

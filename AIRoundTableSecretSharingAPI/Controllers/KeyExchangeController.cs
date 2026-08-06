@@ -47,7 +47,7 @@ public class KeyExchangeController : ControllerBase
     public async Task<ActionResult<MessageResponse>> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
         // Identity comes from the token; body field is ignored
-        request.ProducerId = User.FindFirstValue("oid")!;
+        request.ProducerId = User.GetOid()!;
 
         if (string.IsNullOrEmpty(request.PublicKeyBase64))
             return BadRequest("PublicKeyBase64 is required");

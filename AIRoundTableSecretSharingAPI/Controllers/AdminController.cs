@@ -80,16 +80,12 @@ public class AdminController : ControllerBase
             .Select(p => new ReplaceProducerItem
             {
                 ProducerId = p.ProducerId.Trim(),
-                DisplayName = p.DisplayName.Trim(),
-                ClientSecret = p.ClientSecret.Trim()
+                DisplayName = p.DisplayName.Trim()
             })
             .ToList();
 
         if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ProducerId) || string.IsNullOrWhiteSpace(p.DisplayName)))
             return BadRequest(new { error = "Each producer must include non-empty producerId and displayName." });
-
-        if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ClientSecret)))
-            return BadRequest(new { error = "Each producer must include a non-empty clientSecret." });
 
         var duplicateIds = normalizedProducers
             .GroupBy(p => p.ProducerId, StringComparer.OrdinalIgnoreCase)
@@ -125,10 +121,6 @@ public class AdminController : ControllerBase
                 });
             }
 
-            await _credentialService.ReplaceProducerCredentialsAsync(
-                normalizedProducers.Select(p => (p.ProducerId, p.ClientSecret)),
-                HttpContext.RequestAborted);
-
             var sortedProducerIds = normalizedProducers
                 .Select(p => p.ProducerId)
                 .OrderBy(id => id, StringComparer.Ordinal)
@@ -136,7 +128,8 @@ public class AdminController : ControllerBase
 
             var epoch = new ProducerEpoch
             {
-                EpochId = 1,
+                // Use Unix timestamp so each reset gets a unique, ever-increasing ID
+                EpochId = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 StartDate = startDate,
                 EndDate = null,
                 ProducerIds = sortedProducerIds,

@@ -103,10 +103,7 @@ public class RegistryController : ControllerBase
     public async Task<IActionResult> SelfRegister()
     {
         // Azure AD OID claim — name varies depending on MapInboundClaims setting
-        var producerId = User.FindFirstValue("oid")
-            ?? User.FindFirstValue("http://schemas.microsoft.com/identity/claims/objectidentifier")
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var producerId = User.GetOid();
 
         if (producerId is null)
         {

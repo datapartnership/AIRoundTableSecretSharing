@@ -37,7 +37,7 @@ public class CiphertextController : ControllerBase
     public async Task<ActionResult<MessageResponse>> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
         // Identity comes from the token; body field is ignored
-        request.SenderId = User.FindFirstValue("oid")!;
+        request.SenderId = User.GetOid()!;
 
         if (string.IsNullOrEmpty(request.RecipientId) ||
             string.IsNullOrEmpty(request.CiphertextBase64))
