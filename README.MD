@@ -1,6 +1,6 @@
 # Privacy-Preserving Secure Aggregation
 
-A .NET 10 + React implementation of **cryptographically secure multi-party aggregation** using pairwise noise cancellation with **ML-KEM-768** (FIPS 203, the NIST post-quantum Key Encapsulation Mechanism standard). Partners can contribute sensitive values to a shared aggregate without revealing individual values — not even to the aggregator.
+A .NET 10 + React implementation of **cryptographically secure multi-party aggregation** using pairwise noise cancellation with **ML-KEM-768** (FIPS 203, the NIST post-quantum Key Encapsulation Mechanism standard). Partners authenticate via Azure Entra ID and run the full four-phase protocol directly in the browser — no pre-shared secrets, no client credentials, no manual coordination.
 
 ## 🎯 Problem Statement
 
@@ -101,10 +101,15 @@ Noise is derived using HMAC-SHA256 with the shared secret as the key. The sign d
 
 ```csharp
 // SecureNoiseGenerator.cs
-long noise = HMAC-SHA256(sharedSecret, country || month) → scaled to [-maxNoise, +maxNoise]
-int  sign  = (myId < otherId) ? +1 : -1;     // smaller adds, larger subtracts
+var hmac   = new HMACSHA256(sharedSecret);
+var hash   = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month:yyyy-MM}"));
+var seed   = BitConverter.ToInt64(hash, 0);         // first 8 bytes as LE signed int64
+var range  = 2 * maxNoise + 1;
+var noise  = ((seed % range) + range) % range - maxNoise;  // Python-compatible modulo
 
-maskedMAU = actualMAU + Σ(noise_with_partner × sign)
+int sign = (myId < otherId) ? +1 : -1;   // smaller partner adds, larger subtracts
+
+maskedMAU = actualMAU + Σ(noise × sign)
 ```
 
 The aggregator receives only `maskedMAU` — it cannot reproduce the noise without the shared secrets.
@@ -153,45 +158,56 @@ The aggregator learns only the total (1,700,000) but **cannot determine** any in
 
 ```
 AIRoundTableSecretSharing/
-├── AIRoundTableSecretSharingCommon.sln    # Solution file
+├── AIRoundTableSecretSharingCommon.sln
 │
 ├── AIRoundTableSecretSharingAPI/          # ASP.NET Core Web API (Aggregator)
 │   ├── Controllers/
-│   │   ├── AuthController.cs              # OAuth 2.0 client credentials token endpoint
-│   │   ├── MetricsController.cs           # Submit metrics, get aggregates
-│   │   ├── RegistryController.cs          # Manage partners and epochs
-│   │   ├── KeyExchangeController.cs       # ML-KEM public key registration
-│   │   └── CiphertextController.cs        # ML-KEM ciphertext relay
+│   │   ├── AdminController.cs             # Reset, create epoch (admin group only)
+│   │   ├── MetricsController.cs           # Submit masked metrics, get aggregates
+│   │   ├── RegistryController.cs          # Partners & epoch registry; self-registration
+│   │   ├── KeyExchangeController.cs       # ML-KEM encapsulation key registration
+│   │   ├── CiphertextController.cs        # ML-KEM ciphertext relay
+│   │   └── ClaimsPrincipalExtensions.cs   # OID extraction from Entra JWT
+│   ├── Data/
+│   │   └── AppDbContext.cs                # EF Core DbContext (Azure SQL)
+│   ├── Migrations/                        # EF Core migrations
+│   ├── Models/
+│   │   └── ApiResponses.cs                # API response types
+│   ├── Repositories/                      # EF Core repository implementations
 │   ├── Services/
-│   │   ├── InMemoryDatastore.cs           # In-memory storage for demo
-│   │   ├── KeyStore.cs                    # Store partner encapsulation keys
-│   │   └── CiphertextStore.cs             # Store ML-KEM ciphertexts
-│   ├── Program.cs
-│   └── appsettings.json
+│   │   └── DbClientCredentialService.cs   # (retained for historical compatibility)
+│   ├── Program.cs                         # DI setup, Entra auth, CORS, DB migration
+│   └── appsettings.json                   # Azure AD config, connection string
 │
 ├── AIRoundTableSecretSharingCommon/       # Shared library
 │   ├── Core/
 │   │   ├── MlKemKeyExchange.cs            # ML-KEM-768 key gen, encapsulate, decapsulate
-│   │   ├── SecureNoiseGenerator.cs        # HMAC-based noise from shared secrets
-│   │   └── DeterministicNoiseGenerator.cs # Simple hash-based noise (basic demo only)
-│   ├── Models/
-│   │   ├── MetricSubmission.cs            # Submission with masked value
-│   │   ├── AggregationResult.cs           # Aggregation result with Total
-│   │   ├── SubmissionResult.cs            # Submission result
-│   │   ├── ProducerInfo.cs                # Partner information
-│   │   ├── ProducerEpoch.cs               # Partner set for a time period
-│   │   └── PartnerPublicKey.cs            # Encapsulation key + ciphertext models
+│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 noise; Python-compatible
+│   │   └── DeterministicNoiseGenerator.cs # Hash-based noise (legacy console demo)
+│   ├── Models/                            # Shared DTOs (MetricSubmission, ProducerInfo, …)
 │   └── Producers/
-│       ├── SecureProducerClient.cs        # Secure client with ML-KEM flow
-│       └── ProducerClient.cs              # Basic client (deterministic demo only)
+│       └── SecureProducerClient.cs        # .NET client with full ML-KEM protocol flow
 │
-├── AIRoundTableSecretSharingSecureDemo/   # Console demo with full ML-KEM exchange
-│   └── Program.cs                         # Interactive secure aggregation demo
+├── AIRoundTableSecretSharingSecureDemo/   # Console demo (full ML-KEM exchange)
 │
-└── web-ui/                                # React demonstration UI
+├── python-clients/                        # Reference Python implementation
+│   ├── keygen.py                          # ML-KEM-768 key generation (kyber-py)
+│   ├── exchange.py                        # Encapsulation / decapsulation
+│   ├── submit.py                          # Masked submission
+│   ├── generate_simulation.py             # Bulk test data generator
+│   └── PROTOCOL.md                        # Python-side protocol notes
+│
+└── web-ui/                                # React + MSAL partner / admin UI
     └── src/
-        ├── pages/                         # Partner and results pages
-        └── utils/                         # Noise calculation utilities
+        ├── pages/
+        │   ├── Home.jsx          # Landing page with protocol overview
+        │   ├── ProtocolFlow.jsx  # Automated 4-step wizard (key gen → submit)
+        │   ├── AdminPanel.jsx    # Create epochs, clear data (admin group only)
+        │   └── Results.jsx       # Aggregated results by country / month
+        └── utils/
+            ├── api.js            # All API calls (Entra token injected automatically)
+            ├── crypto.js         # ML-KEM-768 via `mlkem` npm package
+            └── noise.js          # HMAC-SHA256 noise; matches C# & Python exactly
 ```
 
 ## 🔧 Key Components
@@ -286,51 +302,58 @@ An **epoch** represents a fixed set of partners for a time period. All partners 
 
 ### API Endpoints
 
-All `/api/` endpoints require a valid Bearer token obtained from `POST /auth/token`.
+All endpoints require a valid Azure Entra ID Bearer token. The caller's producer ID is read from the `oid` claim in the token — no `producerId` in the request body.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/auth/token` | POST | Obtain a Bearer token (client credentials flow) |
-| `/api/keyexchange/register` | POST | Register ML-KEM-768 encapsulation key (1184 bytes) |
-| `/api/keyexchange/keys` | GET | Get all partners' encapsulation keys |
-| `/api/keyexchange/keys/{id}` | GET | Get a specific partner's encapsulation key |
-| `/api/keyexchange/status` | GET | Check key registration status |
-| `/api/ciphertext` | POST | Store a KEM ciphertext (from encapsulating partner) |
-| `/api/ciphertext` | GET | Fetch ciphertexts addressed to a given partner |
-| `/api/registry/producers` | GET | List active partners |
-| `/api/registry/epoch` | GET | Get current epoch info |
-| `/api/metrics/submit` | POST | Submit a masked metric value |
-| `/api/metrics/aggregate` | GET | Get aggregate for a country/month |
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/registry/producers` | GET | Partner | List all registered producers |
+| `/registry/producers/me` | POST | Partner | Self-register (upsert) on first login |
+| `/registry/epoch` | GET | Partner | Get current epoch |
+| `/keyexchange/register` | POST | Partner | Register ML-KEM-768 encapsulation key |
+| `/keyexchange/keys` | GET | Partner | All partners' encapsulation keys |
+| `/keyexchange/status` | GET | Partner | Key registration status for current epoch |
+| `/ciphertext` | POST | Partner | Store a KEM ciphertext (sender → recipient) |
+| `/ciphertext` | GET | Partner | Fetch ciphertexts addressed to the caller |
+| `/metrics/submit` | POST | Partner | Submit a masked metric value |
+| `/metrics/aggregate` | GET | Partner | Get aggregate for a country / month |
+| `/admin/producers/reset-and-create-epoch` | POST | Admin | Select partners and open a new epoch |
+| `/admin/reset` | POST | Admin | Clear all data |
 
-### Authentication — OAuth 2.0 Client Credentials
+### Authentication — Azure Entra ID (Microsoft Identity Platform)
 
-All `/api/` endpoints are protected by JWT Bearer authentication. Clients first obtain a short-lived token from `POST /auth/token` using their `client_id` and `client_secret`, then include it as a Bearer token in every subsequent request.
+All endpoints are protected by `AddMicrosoftIdentityWebApi`. Clients obtain a Bearer token from Entra ID using MSAL (interactive browser flow in the web UI, or device-code / client-credentials for CLI tools) and include it as `Authorization: Bearer <token>`.
 
-Client credentials are configured in `appsettings.json`:
+Authorization policies are enforced via group membership embedded in the access token:
+
+- **Partner** policy — caller must be a member of the `PartnerGroupId` group
+- **Admin** policy — caller must be a member of the `AdminGroupId` group
 
 ```json
+// appsettings.json
 {
-  "Jwt": {
-    "Key": "AIRoundTable-JWT-Signing-Key-2026-MustBe32CharsOrMore!",
-    "Issuer": "AIRoundTableSecretSharingAPI",
-    "Audience": "AIRoundTableSecretSharingAPI",
-    "ExpiryMinutes": 60
-  },
-  "ClientCredentials": {
-    "partnerA": "pA-client-secret-2026-abc123",
-    "partnerB": "pB-client-secret-2026-def456",
-    "partnerC": "pC-client-secret-2026-ghi789"
+  "AzureAd": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "<tenant-id>",
+    "ClientId": "<api-app-client-id>",
+    "AdminGroupId": "<admin-aad-group-object-id>",
+    "PartnerGroupId": "<partner-aad-group-object-id>"
   }
 }
 ```
 
-The C# client handles this automatically via `SecureProducerClient.CreateAsync(...)`.
+The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everywhere — no per-client secrets or pre-seeded partner lists are required.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
 - .NET 10 SDK
+- Node.js 20+
+- Access to an Azure SQL database (update `ConnectionStrings:DefaultConnection` in `appsettings.json`)
+- An Azure Entra ID tenant with:
+  - An API app registration (set as `AzureAd:ClientId` in `appsettings.json`)
+  - A Web UI app registration (set in `web-ui/src/main.jsx`)
+  - An admin security group and a partner security group
 
 ### Run the API
 
@@ -339,36 +362,32 @@ cd AIRoundTableSecretSharingAPI
 dotnet run
 ```
 
-The API runs on `http://localhost:5149`.
+The API runs on `http://localhost:5149`. On first start it applies EF Core migrations automatically.
 
-### Run the Secure Console Demo
-
-The demo runs the full four-phase ML-KEM protocol:
-
-```bash
-# In a separate terminal (keep the API running)
-cd AIRoundTableSecretSharingSecureDemo
-dotnet run
-```
-
-The demo walks through:
-1. **Auth** — Each partner obtains a Bearer token via client credentials
-2. **Phase 1** — Each partner generates an ML-KEM-768 key pair and registers the encapsulation key
-3. **Phase 2** — Alphabetically larger partners encapsulate for smaller ones, posting ciphertexts to the aggregator
-4. **Phase 3** — Smaller partners fetch and decapsulate ciphertexts to recover shared secrets
-5. **Phase 4** — Each partner masks their MAU with HMAC noise and submits; the aggregator sums to the true total
-
-### Run the Web UI (Visual Demo)
+### Run the Web UI
 
 ```bash
 cd web-ui
-npm install
+npm install   # first time only
 npm run dev
 ```
 
-The UI runs on `http://localhost:3000`.
+The UI runs on `http://localhost:3000`. Partners sign in with their organisational Azure AD account; the browser UI runs the full four-phase ML-KEM protocol automatically:
 
-> **Note:** The web UI demonstrates the noise-cancellation concept visually using a simplified hash-based approach. For production use, integrate the `SecureProducerClient` with the full ML-KEM protocol.
+1. **Step 1** — Generate an ML-KEM-768 key pair locally and register the encapsulation key
+2. **Step 2** — Automatically encapsulate for every partner with a smaller OID and post the ciphertext
+3. **Step 3** — Poll for incoming ciphertexts and automatically decapsulate each one to derive shared secrets
+4. **Step 4** — Enter actual MAU values per country / month and submit masked values
+
+An **Admin** account can open the Admin Panel to select which registered partners participate in a new epoch, or clear all data to start over.
+
+### Run the Console Demo
+
+```bash
+# Keep the API running in another terminal
+cd AIRoundTableSecretSharingSecureDemo
+dotnet run
+```
 
 ## 🔒 Security Analysis
 
@@ -385,10 +404,10 @@ This means:
 
 | Attack Vector | Protection |
 |---------------|------------|
-| Unauthenticated access | OAuth 2.0 client credentials; all `/api/` endpoints require a valid JWT Bearer token |
-| Token theft | JWTs are short-lived (60 min) and signed with HMAC-SHA256 |
-| Aggregator tries to recover noise | Would need shared secrets; ML-KEM is IND-CCA2 secure |
-| Aggregator stores ciphertexts indefinitely | Still cannot decapsulate without decapsulation keys |
+| Unauthenticated access | Azure Entra ID JWT Bearer; all endpoints require a valid token |
+| Privilege escalation | Group-membership policies (Admin / Partner) enforced by the API |
+| Aggregator tries to recover noise | Needs shared secrets; ML-KEM is IND-CCA2 secure |
+| Aggregator stores ciphertexts | Still cannot decapsulate without the partner's private decapsulation key |
 | Eavesdropper intercepts traffic | Sees only encapsulation keys, ciphertexts, and masked values |
 | Quantum adversary | ML-KEM security is based on MLWE, not factoring or discrete log |
 | N−1 partners collude | Can compute Nth partner's value (inherent to pairwise noise) |
@@ -408,7 +427,7 @@ This means:
 | Runtime | `System.Security.Cryptography.MLKem` (.NET 9+) | Built-in, no external dependency |
 | Noise Derivation | HMAC-SHA256 | Secure PRF; deterministic; context-bound per (country, month) |
 | Key Storage | Encapsulation keys only | Decapsulation keys never leave partners; ciphertexts are opaque to aggregator |
-| Authentication | OAuth 2.0 client credentials + JWT Bearer | Standard machine-to-machine auth; short-lived tokens; no long-lived secrets on the wire |
+| Authentication | Azure Entra ID (MSAL / Microsoft Identity Platform) JWT Bearer | Standard enterprise SSO; no per-client secrets; OID claim identifies partner |
 
 ## 📚 Related Concepts
 
@@ -420,54 +439,46 @@ This means:
 
 ## 🧪 Testing with curl
 
+Obtain a token using MSAL device-code flow or from the browser's developer tools, then:
+
 ```bash
-# Obtain a Bearer token (client credentials flow)
-TOKEN=$(curl -s -X POST http://localhost:5149/auth/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=partnerB&client_secret=pB-client-secret-2026-def456" \
-  | jq -r .access_token)
+TOKEN="<paste-entra-bearer-token>"
+BASE="http://localhost:5149"
 
-# Phase 1 — Register encapsulation key
-curl -X POST http://localhost:5149/api/keyexchange/register \
+# Self-register as a partner (upsert on first login)
+curl -X POST "$BASE/registry/producers/me" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get current epoch
+curl -H "Authorization: Bearer $TOKEN" "$BASE/registry/epoch"
+
+# Register ML-KEM-768 encapsulation key (1184 bytes, base64)
+curl -X POST "$BASE/keyexchange/register" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"producerId": "partnerB", "publicKeyBase64": "<BASE64_1184_BYTES>"}'
+  -d '{"publicKeyBase64": "<BASE64_1184_BYTES>"}'
 
-# Get all registered encapsulation keys
+# Check key registration status
+curl -H "Authorization: Bearer $TOKEN" "$BASE/keyexchange/status"
+
+# Post ciphertext (encapsulating partner → recipient OID)
+curl -X POST "$BASE/ciphertext" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"recipientId": "<partner-oid>", "ciphertextBase64": "<BASE64_1088_BYTES>"}'
+
+# Fetch ciphertexts addressed to the caller
+curl -H "Authorization: Bearer $TOKEN" "$BASE/ciphertext"
+
+# Submit a masked metric (producerId and signature are set from the JWT — omit them)
+curl -X POST "$BASE/metrics/submit" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"country": "US", "month": "2026-06-01", "value": 1230000, "epochId": <epochId>}'
+
+# Get the aggregate (available once all partners have submitted)
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:5149/api/keyexchange/keys
-
-# Phase 2 — Post ciphertext (B → A)
-curl -X POST http://localhost:5149/api/ciphertext \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"senderId": "partnerB", "recipientId": "partnerA", "ciphertextBase64": "<BASE64_1088_BYTES>"}'
-
-# Phase 3 — Fetch ciphertexts addressed to A (use partnerA token)
-TOKEN_A=$(curl -s -X POST http://localhost:5149/auth/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=partnerA&client_secret=pA-client-secret-2026-abc123" \
-  | jq -r .access_token)
-
-curl -H "Authorization: Bearer $TOKEN_A" \
-  "http://localhost:5149/api/ciphertext?recipientId=partnerA"
-
-# Phase 4 — Submit masked metric
-curl -X POST http://localhost:5149/api/metrics/submit \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN_A" \
-  -d '{
-    "producerId": "partnerA",
-    "country": "USA",
-    "month": "2026-05-01",
-    "value": 1230000,
-    "epochId": 1,
-    "signature": "demo"
-  }'
-
-# Get the aggregate (requires all partners to have submitted)
-curl -H "Authorization: Bearer $TOKEN_A" \
-  "http://localhost:5149/api/metrics/aggregate?country=USA&month=2026-05-01"
+  "$BASE/metrics/aggregate?country=US&month=2026-06-01"
 ```
 
 ## 📄 License
