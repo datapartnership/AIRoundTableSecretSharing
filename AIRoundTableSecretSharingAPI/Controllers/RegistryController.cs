@@ -1,5 +1,7 @@
 
 // Controllers/RegistryController.cs
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,7 +11,7 @@ using AIRoundTableSecretSharingCommon.Models;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class RegistryController : ControllerBase
 {
@@ -94,6 +96,36 @@ public class RegistryController : ControllerBase
             request.ProducerId, startDate, newEpoch.EpochId);
 
         return Ok(new AddProducerResponse { Message = "Producer added", Epoch = newEpoch });
+    }
+
+    [HttpPost("producers/me")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> SelfRegister()
+    {
+        // Azure AD OID claim — name varies depending on MapInboundClaims setting
+        var producerId = User.GetOid();
+
+        if (producerId is null)
+        {
+            var allClaims = User.Claims.Select(c => $"{c.Type}={c.Value}").ToList();
+            _logger.LogError("SelfRegister: could not resolve producerId. Claims present: {Claims}", string.Join(", ", allClaims));
+            return BadRequest(new { error = "Unable to resolve user identity from token.", claims = allClaims });
+        }
+
+        var displayName = User.FindFirstValue("name")
+            ?? User.FindFirstValue("preferred_username")
+            ?? producerId;
+
+        await _producerRepo.UpsertProducerAsync(new ProducerInfo
+        {
+            ProducerId = producerId,
+            DisplayName = displayName,
+            JoinedDate = DateTime.UtcNow,
+            IsActive = true,
+        });
+
+        _logger.LogInformation("Self-registered producer {ProducerId} ({DisplayName})", producerId, displayName);
+        return Ok(new { producerId, displayName });
     }
 }
 

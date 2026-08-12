@@ -1,11 +1,9 @@
-using System.Text;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
+using Microsoft.Identity.Web;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,32 +15,25 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:3000")
+        policy.WithOrigins("http://localhost:3000", "https://aiindexapi.azurewebsites.net")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
 });
 
 builder.Services.AddAuthorization(options =>
-    options.AddPolicy("AdminOnly", policy => policy.RequireClaim("role", "admin")));
+{
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireClaim("groups", builder.Configuration["AzureAd:AdminGroupId"]!));
+    // Admins are also permitted on partner endpoints
+    options.AddPolicy("Partner", policy =>
+        policy.RequireClaim("groups",
+            builder.Configuration["AzureAd:PartnerGroupId"]!,
+            builder.Configuration["AzureAd:AdminGroupId"]!));
+});
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        // Keep claim names exactly as issued (prevents "role" → ClaimTypes.Role remapping)
-        options.MapInboundClaims = false;
-        var jwtKey = builder.Configuration["Jwt:Key"]!;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
-        };
-    });
+builder.Services.AddAuthentication()
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -55,49 +46,11 @@ builder.Services.AddScoped<IClientCredentialService, DbClientCredentialService>(
 
 var app = builder.Build();
 
-// Migrate and seed on startup
+// Migrate on startup — no seed data; partners self-register via POST /registry/producers/me
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
-
-    if (!db.Producers.Any())
-    {
-        var startDate = new DateTime(2025, 1, 1);
-        db.Producers.AddRange(
-            new ProducerInfo { ProducerId = "partnerA", DisplayName = "Partner A", JoinedDate = startDate, IsActive = true },
-            new ProducerInfo { ProducerId = "partnerB", DisplayName = "Partner B", JoinedDate = startDate, IsActive = true },
-            new ProducerInfo { ProducerId = "partnerC", DisplayName = "Partner C", JoinedDate = startDate, IsActive = true }
-        );
-        db.Epochs.Add(new ProducerEpoch
-        {
-            EpochId = 1,
-            StartDate = startDate,
-            EndDate = null,
-            ProducerIds = new List<string> { "partnerA", "partnerB", "partnerC" },
-            ProducerCount = 3
-        });
-        await db.SaveChangesAsync();
-        Console.WriteLine("Seeded 3 producers and initial epoch");
-    }
-
-    if (!db.ClientCredentials.Any())
-    {
-        var initialCredentials = builder.Configuration.GetSection("ClientCredentials").Get<Dictionary<string, string>>()
-            ?? new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var pair in initialCredentials)
-        {
-            db.ClientCredentials.Add(new AIRoundTableSecretSharingAPI.Models.ClientCredential
-            {
-                ClientId = pair.Key,
-                ClientSecret = pair.Value
-            });
-        }
-
-        await db.SaveChangesAsync();
-        Console.WriteLine($"Seeded {initialCredentials.Count} client credentials");
-    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -105,6 +58,13 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     app.MapScalarApiReference();
 }
+
+app.UseDefaultFiles(new DefaultFilesOptions
+{
+    DefaultFileNames = new List<string> { "index.html" }
+});
+
+app.UseStaticFiles();
 
 app.UseCors();
 app.UseAuthentication();

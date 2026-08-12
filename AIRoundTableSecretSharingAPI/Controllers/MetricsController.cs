@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class MetricsController : ControllerBase
 {
@@ -41,7 +41,7 @@ public class MetricsController : ControllerBase
     public async Task<ActionResult<MessageResponse>> SubmitMetric([FromBody] MetricSubmission submission)
     {
         // Identity is taken from the authenticated token — body field is ignored
-        submission.ProducerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+        submission.ProducerId = User.GetOid()!;
 
         // Validate and normalise month format to YYYY-MM
         if (string.IsNullOrEmpty(submission.Month) ||
@@ -126,8 +126,7 @@ public class MetricsController : ControllerBase
     [ProducesResponseType(401)]
     public async Task<ActionResult<ProducerSubmissionsResponse>> GetMySubmissions()
     {
-        var producerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var producerId = User.GetOid();
 
         if (string.IsNullOrEmpty(producerId))
             return Unauthorized();

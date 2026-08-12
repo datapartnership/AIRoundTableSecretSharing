@@ -55,26 +55,9 @@ public class AdminController : ControllerBase
         await _producerRepo.ClearAllAsync();
         await _credentialService.ResetToConfiguredCredentialsAsync(HttpContext.RequestAborted);
 
-        var startDate = new DateTime(2025, 1, 1);
+        _logger.LogInformation("Database reset complete. All data cleared.");
 
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerA", DisplayName = "Partner A", JoinedDate = startDate, IsActive = true });
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerB", DisplayName = "Partner B", JoinedDate = startDate, IsActive = true });
-        await _producerRepo.AddProducerAsync(new ProducerInfo { ProducerId = "partnerC", DisplayName = "Partner C", JoinedDate = startDate, IsActive = true });
-
-        // CreateEpochAsync closes any open epoch first — since we just cleared, add directly
-        var epoch = new ProducerEpoch
-        {
-            EpochId = 1,
-            StartDate = startDate,
-            EndDate = null,
-            ProducerIds = new List<string> { "partnerA", "partnerB", "partnerC" },
-            ProducerCount = 3
-        };
-        await _producerRepo.AddEpochAsync(epoch);
-
-        _logger.LogInformation("Database reset complete. Re-seeded 3 producers and epoch 1.");
-
-        return Ok(new MessageResponse { Message = "Database reset to initial state." });
+        return Ok(new MessageResponse { Message = "Database cleared." });
     }
 
     /// <summary>
@@ -97,16 +80,12 @@ public class AdminController : ControllerBase
             .Select(p => new ReplaceProducerItem
             {
                 ProducerId = p.ProducerId.Trim(),
-                DisplayName = p.DisplayName.Trim(),
-                ClientSecret = p.ClientSecret.Trim()
+                DisplayName = p.DisplayName.Trim()
             })
             .ToList();
 
         if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ProducerId) || string.IsNullOrWhiteSpace(p.DisplayName)))
             return BadRequest(new { error = "Each producer must include non-empty producerId and displayName." });
-
-        if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ClientSecret)))
-            return BadRequest(new { error = "Each producer must include a non-empty clientSecret." });
 
         var duplicateIds = normalizedProducers
             .GroupBy(p => p.ProducerId, StringComparer.OrdinalIgnoreCase)
@@ -142,10 +121,6 @@ public class AdminController : ControllerBase
                 });
             }
 
-            await _credentialService.ReplaceProducerCredentialsAsync(
-                normalizedProducers.Select(p => (p.ProducerId, p.ClientSecret)),
-                HttpContext.RequestAborted);
-
             var sortedProducerIds = normalizedProducers
                 .Select(p => p.ProducerId)
                 .OrderBy(id => id, StringComparer.Ordinal)
@@ -153,7 +128,8 @@ public class AdminController : ControllerBase
 
             var epoch = new ProducerEpoch
             {
-                EpochId = 1,
+                // Use Unix timestamp so each reset gets a unique, ever-increasing ID
+                EpochId = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 StartDate = startDate,
                 EndDate = null,
                 ProducerIds = sortedProducerIds,

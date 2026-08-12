@@ -30,7 +30,6 @@ public class ReplaceProducerItem
 {
     public string ProducerId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
-    public string ClientSecret { get; set; } = string.Empty;
 }
 
 public class ReplaceProducersResponse

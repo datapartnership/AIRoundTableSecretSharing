@@ -92,3 +92,4 @@ publish-profiles/
 node_modules/
 dist/
 *.http
+*.sh

@@ -28,6 +28,21 @@ public class EfProducerRepository : IProducerRepository
         await _db.SaveChangesAsync();
     }
 
+    public async Task UpsertProducerAsync(ProducerInfo producer)
+    {
+        var existing = await _db.Producers.FindAsync(producer.ProducerId);
+        if (existing is null)
+        {
+            _db.Producers.Add(producer);
+        }
+        else
+        {
+            existing.DisplayName = producer.DisplayName;
+            existing.IsActive = true;
+        }
+        await _db.SaveChangesAsync();
+    }
+
     public async Task CreateEpochAsync(ProducerEpoch epoch)
     {
         var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(e => e.EndDate == null);

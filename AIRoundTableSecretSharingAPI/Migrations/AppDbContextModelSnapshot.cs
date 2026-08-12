@@ -17,7 +17,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -58,12 +58,10 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                         .HasColumnType("nvarchar(450)");
 
                     b.Property<string>("ProducerId")
-                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("Signature")
-                        .IsRequired()
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
@@ -76,7 +74,8 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ProducerId", "Country", "Month", "EpochId")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[ProducerId] IS NOT NULL");
 
                     b.ToTable("Submissions");
                 });

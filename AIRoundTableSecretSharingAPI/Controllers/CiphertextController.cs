@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using Microsoft.AspNetCore.Authorization;
@@ -13,7 +15,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 /// Only the intended recipient — who holds the decapsulation key — can recover the shared secret.
 /// </summary>
 [ApiController]
-[Authorize]
+[Authorize(Policy = "Partner")]
 [Route("api/[controller]")]
 public class CiphertextController : ControllerBase
 {
@@ -34,12 +36,12 @@ public class CiphertextController : ControllerBase
     [ProducesResponseType(400)]
     public async Task<ActionResult<MessageResponse>> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
-        if (string.IsNullOrEmpty(request.SenderId) ||
-            string.IsNullOrEmpty(request.RecipientId) ||
+        // Identity comes from the token; body field is ignored
+        request.SenderId = User.GetOid()!;
+
+        if (string.IsNullOrEmpty(request.RecipientId) ||
             string.IsNullOrEmpty(request.CiphertextBase64))
-        {
-            return BadRequest("SenderId, RecipientId, and CiphertextBase64 are required.");
-        }
+            return BadRequest("RecipientId and CiphertextBase64 are required.");
 
         if (request.SenderId == request.RecipientId)
             return BadRequest("SenderId and RecipientId must differ.");
