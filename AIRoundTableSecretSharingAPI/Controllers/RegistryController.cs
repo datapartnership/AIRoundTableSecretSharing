@@ -6,6 +6,7 @@ using AIRoundTableSecretSharingAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AIRoundTableSecretSharingAPI.Repositories;
+using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 
 namespace AIRoundTableSecretSharingAPI.Controllers;
@@ -16,11 +17,16 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 public class RegistryController : ControllerBase
 {
     private readonly IProducerRepository _producerRepo;
+    private readonly ISubmissionRepository _submissionRepo;
     private readonly ILogger<RegistryController> _logger;
 
-    public RegistryController(IProducerRepository producerRepo, ILogger<RegistryController> logger)
+    public RegistryController(
+        IProducerRepository producerRepo,
+        ISubmissionRepository submissionRepo,
+        ILogger<RegistryController> logger)
     {
         _producerRepo = producerRepo;
+        _submissionRepo = submissionRepo;
         _logger = logger;
     }
 
@@ -49,9 +55,11 @@ public class RegistryController : ControllerBase
         if (epoch == null)
             return NotFound("No epoch found for date");
 
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+
         _logger.LogInformation(
-            "Epoch requested for {Date}: Epoch {EpochId} with {Count} producers",
-            effectiveDate, epoch.EpochId, epoch.ProducerCount);
+            "Epoch requested for {Date}: Epoch {EpochId} with {Count} producers, closed={Closed}",
+            effectiveDate, epoch.EpochId, epoch.ProducerCount, epoch.IsClosed);
 
         return Ok(epoch);
     }

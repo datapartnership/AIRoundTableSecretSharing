@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
+using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -79,6 +80,17 @@ public class MetricsController : ControllerBase
             });
         }
 
+        if (epoch.IsClosed)
+        {
+            return BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId });
+        }
+
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        if (epoch.IsClosed)
+        {
+            return BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId });
+        }
+
         // Verify key exchange is complete before accepting any submission.
         // Every partner must have registered a public key and every pair must
         // have exchanged a ciphertext, otherwise noise will not cancel.
@@ -118,7 +130,16 @@ public class MetricsController : ControllerBase
             "RECEIVED submission from {Producer} for {Country} - {Month}: Value = {Value:N0}",
             submission.ProducerId, submission.Country, submission.Month, submission.Value);
 
-        return Ok(new MessageResponse { Message = "Submission received" });
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        if (epoch.IsClosed)
+        {
+            _logger.LogInformation("Epoch {EpochId} closed — all producers submitted every cell.", epoch.EpochId);
+        }
+
+        return Ok(new MessageResponse
+        {
+            Message = epoch.IsClosed ? "Submission received. Epoch is now closed." : "Submission received"
+        });
     }
 
     [HttpGet("mysubmissions")]

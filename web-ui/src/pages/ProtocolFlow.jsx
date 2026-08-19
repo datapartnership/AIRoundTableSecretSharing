@@ -23,7 +23,23 @@ const ctKey = (id) => `mlkem_ct_${id}`
 const ctSeenKey = (id) => `mlkem_ctseen_${id}`
 const epKey = (id) => `mlkem_epoch_${id}`
 
-const STEPS = ['Key Generation', 'Encapsulation', 'Decapsulation', 'Submit Data']
+const POLL_MS = 2000
+const TAG = '[protocol]'
+
+function log(event, data) {
+  if (data === undefined) console.log(TAG, event)
+  else console.log(TAG, event, data)
+}
+
+function warn(event, data) {
+  if (data === undefined) console.warn(TAG, event)
+  else console.warn(TAG, event, data)
+}
+
+function fail(event, err, data) {
+  if (data === undefined) console.error(TAG, event, err)
+  else console.error(TAG, event, err, data)
+}
 
 function wipeLocalCrypto(id) {
   localStorage.removeItem(kpKey(id))
@@ -123,6 +139,7 @@ export default function ProtocolFlow() {
   ctSeenRef.current = ctSeen
 
   const applyClearedCrypto = () => {
+    warn('local crypto wiped')
     setKeyPair(null)
     setSharedSecrets(new Map())
     setSentTo(new Set())
@@ -134,6 +151,12 @@ export default function ProtocolFlow() {
 
   const applyLocalCrypto = (id) => {
     const local = loadLocalCrypto(id)
+    log('restored local crypto', {
+      hasKeyPair: !!local.keyPair,
+      secretPartners: [...local.secrets.keys()],
+      sentTo: [...local.sentTo],
+      seenFrom: [...local.ctSeen.keys()],
+    })
     setKeyPair(local.keyPair)
     setSharedSecrets(local.secrets)
     setSentTo(local.sentTo)
@@ -153,18 +176,30 @@ export default function ProtocolFlow() {
         if (cancelled) return
         setEpoch(ep)
         const storedEpochId = localStorage.getItem(epKey(myId))
+        log('hydrate', {
+          myId,
+          epochId: ep.epochId,
+          producers: ep.producerIds,
+          storedEpochId,
+          isClosed: !!ep.isClosed,
+        })
         if (storedEpochId !== String(ep.epochId)) {
+          warn('epoch changed — wiping local crypto', { storedEpochId, epochId: ep.epochId })
           wipeLocalCrypto(myId)
           localStorage.setItem(epKey(myId), String(ep.epochId))
           applyClearedCrypto()
         } else {
           applyLocalCrypto(myId)
         }
-      } catch {
+      } catch (e) {
+        fail('hydrate failed — using local cache', e)
         if (cancelled) return
         applyLocalCrypto(myId)
       } finally {
-        if (!cancelled) setHydrated(true)
+        if (!cancelled) {
+          setHydrated(true)
+          log('hydrated')
+        }
       }
     })()
 
@@ -176,27 +211,24 @@ export default function ProtocolFlow() {
     if (!myId) return
     api.acquireApiToken(instance, account)
       .then(token => api.selfRegister(token))
-      .catch(() => {}) // non-fatal — partner can still proceed
+      .then((r) => log('self-register ok', r))
+      .catch((e) => fail('self-register failed', e))
   }, [myId])
 
-  // ── Poll status & partner keys on steps 1–3 (after local restore) ───────────
+  // ── Poll epoch always; key exchange only while setup is in progress ─────────
   useEffect(() => {
-    if (!hydrated || step > 3 || !myId) return
+    if (!hydrated || !myId) return
     let alive = true
 
     const poll = async () => {
       try {
         const token = await api.acquireApiToken(instance, account)
-        const [s, pk, ep, sent] = await Promise.all([
-          api.getKeyExchangeStatus(token),
-          api.getPartnerKeys(myId, token),
-          api.getEpoch(token),
-          api.getSentCiphertexts(token).catch(() => ({ ciphertexts: [] })),
-        ])
+        const ep = await api.getEpoch(token)
         if (!alive) return
 
         const storedEpochId = localStorage.getItem(epKey(myId))
         if (storedEpochId !== String(ep.epochId)) {
+          warn('poll: epoch changed — wiping local crypto', { storedEpochId, epochId: ep.epochId })
           wipeLocalCrypto(myId)
           localStorage.setItem(epKey(myId), String(ep.epochId))
           setEpoch(ep)
@@ -205,6 +237,24 @@ export default function ProtocolFlow() {
         }
 
         setEpoch(ep)
+
+        if (ep.isClosed) {
+          log('poll: epoch closed — waiting for a new epoch', { epochId: ep.epochId })
+          return
+        }
+
+        if (step > 3) {
+          log('poll', { step, epochId: ep.epochId, isClosed: false })
+          return
+        }
+
+        const [s, pk, sent] = await Promise.all([
+          api.getKeyExchangeStatus(token),
+          api.getPartnerKeys(myId, token),
+          api.getSentCiphertexts(token).catch(() => ({ ciphertexts: [] })),
+        ])
+        if (!alive) return
+
         setStatus(s)
         setPartnerKeys(pk.partnerKeys ?? [])
 
@@ -218,25 +268,45 @@ export default function ProtocolFlow() {
           })
         }
 
+        log('poll', {
+          step,
+          epochId: ep.epochId,
+          isClosed: !!ep.isClosed,
+          producers: ep.producerIds,
+          registered: `${s.registeredCount}/${s.expectedCount}`,
+          missing: s.missingPartners,
+          partnerKeys: (pk.partnerKeys ?? []).map((p) => p.producerId),
+          ciphertexts: `${s.actualCiphertexts}/${s.expectedCiphertexts}`,
+          exchangeComplete: s.isCiphertextExchangeComplete,
+          serverSentTo: serverSent,
+          localSentTo: [...sentToRef.current],
+          secretPartners: [...secretsRef.current.keys()],
+          hasLocalKey: !!keyPairRef.current,
+          hasServerKey: !!s.myPublicKeyBase64,
+        })
+
         const serverKey = s.myPublicKeyBase64
         const localKp = keyPairRef.current
         if (serverKey && localKp && serverKey !== localKp.ekBase64) {
+          warn('key mismatch: local public key ≠ server public key')
           setKeyError('This browser’s key does not match the key registered on the server. Recreate the epoch, then reset local state.')
         } else if (serverKey && !localKp) {
+          warn('key mismatch: server has a key, this browser has none')
           setKeyError('The server has a public key for you, but this browser has no matching private key. Recreate the epoch, then generate a new key.')
         }
-      } catch {
-        // silent poll failure
+      } catch (e) {
+        fail('poll failed', e)
       }
     }
 
     poll()
-    const id = setInterval(poll, 5000)
+    const id = setInterval(poll, POLL_MS)
     return () => { alive = false; clearInterval(id) }
   }, [hydrated, step, myId, instance, account?.homeAccountId])
 
   // ── Manual state reset (escape hatch for stuck states) ─────────────────────
   const resetLocalState = () => {
+    warn('manual reset local state', { myId })
     wipeLocalCrypto(myId)
     localStorage.removeItem(epKey(myId))
     applyClearedCrypto()
@@ -251,12 +321,15 @@ export default function ProtocolFlow() {
       const token = await api.acquireApiToken(instance, account)
       const existing = keyPairRef.current
       const kp = existing ?? await generateMlKemKeyPair()
+      log(existing ? 're-registering existing key' : 'generated new key pair', { myId })
       await api.registerPublicKey(myId, kp.ekBase64, token)
+      log('public key registered')
       if (!existing) {
         localStorage.setItem(kpKey(myId), JSON.stringify(kp))
         setKeyPair(kp)
       }
     } catch (e) {
+      fail('key generate/register failed', e)
       setKeyError(e.message)
     } finally {
       setKeyBusy(false)
@@ -270,11 +343,15 @@ export default function ProtocolFlow() {
     try {
       const token = await api.acquireApiToken(instance, account)
       const targets = partnerKeys.filter((pk) => pk.producerId < myId)
+      log('encapsulation start', { targets: targets.map((p) => p.producerId) })
       const newSecrets = new Map(secretsRef.current)
       const newSent = new Set(sentToRef.current)
 
       for (const pk of targets) {
-        if (newSecrets.has(pk.producerId) && newSent.has(pk.producerId)) continue
+        if (newSecrets.has(pk.producerId) && newSent.has(pk.producerId)) {
+          log('encapsulation skip (already done)', { recipient: pk.producerId })
+          continue
+        }
 
         if (newSent.has(pk.producerId) && !newSecrets.has(pk.producerId)) {
           throw new Error(
@@ -284,6 +361,7 @@ export default function ProtocolFlow() {
 
         const { ctBase64, sharedSecret } = await encapsulate(pk.publicKeyBase64)
         await api.postCiphertext(myId, pk.producerId, ctBase64, token)
+        log('encapsulated + posted ciphertext', { recipient: pk.producerId, ctBytes: ctBase64?.length })
         newSecrets.set(pk.producerId, sharedSecret)
         newSent.add(pk.producerId)
         persistSecrets(myId, newSecrets)
@@ -294,7 +372,9 @@ export default function ProtocolFlow() {
       sentToRef.current = newSent
       setSharedSecrets(newSecrets)
       setSentTo(newSent)
+      log('encapsulation done', { sentTo: [...newSent], secretPartners: [...newSecrets.keys()] })
     } catch (e) {
+      fail('encapsulation failed', e)
       setEncapError(e.message)
     } finally {
       setEncapBusy(false)
@@ -304,18 +384,26 @@ export default function ProtocolFlow() {
   // ── Step 3: decapsulate received ciphertexts (re-run if blob changed) ───────
   const performDecapsulation = useCallback(async () => {
     const kp = keyPairRef.current
-    if (!kp) return
+    if (!kp) {
+      warn('decapsulation skipped — no local key pair')
+      return
+    }
     setEncapBusy(true)
     setEncapError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
       const { ciphertexts } = await api.getCiphertexts(token)
+      log('decapsulation start', { receivedFrom: (ciphertexts ?? []).map((c) => c.senderId) })
       const newSecrets = new Map(secretsRef.current)
       const seen = new Map(ctSeenRef.current)
 
       for (const ct of ciphertexts ?? []) {
-        if (seen.get(ct.senderId) === ct.ciphertextBase64 && newSecrets.has(ct.senderId)) continue
+        if (seen.get(ct.senderId) === ct.ciphertextBase64 && newSecrets.has(ct.senderId)) {
+          log('decapsulation skip (already done)', { sender: ct.senderId })
+          continue
+        }
         const ss = await decapsulate(ct.ciphertextBase64, kp.dkBase64)
+        log('decapsulated ciphertext', { sender: ct.senderId })
         newSecrets.set(ct.senderId, ss)
         seen.set(ct.senderId, ct.ciphertextBase64)
       }
@@ -326,7 +414,9 @@ export default function ProtocolFlow() {
       ctSeenRef.current = seen
       setSharedSecrets(newSecrets)
       setCtSeen(seen)
+      log('decapsulation done', { secretPartners: [...newSecrets.keys()] })
     } catch (e) {
+      fail('decapsulation failed', e)
       setEncapError(e.message)
     } finally {
       setEncapBusy(false)
@@ -341,8 +431,10 @@ export default function ProtocolFlow() {
         const token = await api.acquireApiToken(instance, account)
         const my = await api.getMySubmissions(token)
         const done = new Set((my.submissions ?? []).map((s) => `${s.country}|${s.month}`))
+        log('loaded submissions', { cells: [...done] })
         setSubmittedCells(done)
       } catch (e) {
+        fail('load submissions failed', e)
         setCellErrors({ _load: e.message })
       }
     })()
@@ -361,15 +453,22 @@ export default function ProtocolFlow() {
     try {
       const token = await api.acquireApiToken(instance, account)
       const masked = await calculateMaskedValue(raw, country, month, myId, sharedSecrets)
+      log('submit cell', { cellId, raw, masked: Math.round(masked), epochId: epoch.epochId })
       await api.submitMetric(
         { country, month, value: Math.round(masked), epochId: epoch.epochId, signature: 'web-ui' },
         token
       )
+      log('submit cell ok', { cellId })
       setSubmittedCells((p) => new Set(p).add(cellId))
+      const ep = await api.getEpoch(token)
+      setEpoch(ep)
+      if (ep.isClosed) log('epoch closed after submit', { epochId: ep.epochId })
     } catch (e) {
       if (e.status === 409) {
+        warn('submit cell already exists', { cellId })
         setSubmittedCells((p) => new Set(p).add(cellId))
       } else {
+        fail('submit cell failed', e, { cellId })
         setCellErrors((p) => ({ ...p, [cellId]: e.message }))
       }
     } finally {
@@ -391,8 +490,6 @@ export default function ProtocolFlow() {
   const epochPartnerIds = epoch?.producerIds ?? []
   const expectedSmallerIds = epochPartnerIds.filter((id) => id < myId)
   const expectedLargerIds = epochPartnerIds.filter((id) => id > myId)
-  const smallerIdPartners = partnerKeys.filter((pk) => pk.producerId < myId)
-  const largerIdPartners = partnerKeys.filter((pk) => pk.producerId > myId)
   const epochKeysReady = (status?.isComplete === true)
     && epochPartnerIds.length >= 2
     && (status?.expectedCount ?? 0) >= 2
@@ -409,113 +506,111 @@ export default function ProtocolFlow() {
 
   // Step 1: auto-generate only after restore, and only if the server has no key yet
   useEffect(() => {
-    if (!hydrated || step !== 1 || keyPair || keyBusy || !epoch || !myId) return
+    if (!hydrated || epoch?.isClosed || step !== 1 || keyPair || keyBusy || !epoch || !myId) return
     if (status?.myPublicKeyBase64) return
+    log('auto: generate and register key')
     generateAndRegister()
-  }, [hydrated, step, !!keyPair, keyBusy, !!epoch, myId, status?.myPublicKeyBase64])
+  }, [hydrated, step, !!keyPair, keyBusy, !!epoch, epoch?.isClosed, myId, status?.myPublicKeyBase64])
 
   // Step 1 → 2: advance once all epoch partners registered AND we hold the matching private key
   useEffect(() => {
-    if (!hydrated || step !== 1 || !keyPair || !keysMatch) return
+    if (!hydrated || epoch?.isClosed || step !== 1 || !keyPair || !keysMatch) return
     if (!status?.isComplete || !status?.registeredPartners?.includes(myId)) return
+    log('step 1 → 2 (all keys registered)')
     setStep(2)
-  }, [hydrated, step, !!keyPair, keysMatch, status?.isComplete, status?.registeredCount])
+  }, [hydrated, step, !!keyPair, keysMatch, status?.isComplete, status?.registeredCount, epoch?.isClosed])
 
   // Step 2: auto-encapsulate once the full epoch key set is present
   useEffect(() => {
-    if (!hydrated || step !== 2 || encapBusy || encapError || !epochKeysReady) return
+    if (!hydrated || epoch?.isClosed || step !== 2 || encapBusy || encapError || !epochKeysReady) return
     if (expectedSmallerIds.length === 0 || allEncapsDone) return
+    log('auto: encapsulate', { expectedSmallerIds })
     performEncapsulation()
-  }, [hydrated, step, epochKeysReady, encapBusy, encapError, allEncapsDone])
+  }, [hydrated, step, epochKeysReady, encapBusy, encapError, allEncapsDone, epoch?.isClosed])
 
   // Step 2 → 3: wait for every smaller epoch partner, not a partial poll snapshot
   useEffect(() => {
-    if (!hydrated || step !== 2 || !epochKeysReady) return
-    if (expectedSmallerIds.length === 0 || allEncapsDone) setStep(3)
-  }, [hydrated, step, epochKeysReady, allEncapsDone, expectedSmallerIds.length])
+    if (!hydrated || epoch?.isClosed || step !== 2 || !epochKeysReady) return
+    if (expectedSmallerIds.length === 0 || allEncapsDone) {
+      log('step 2 → 3 (encapsulation complete)', { expectedSmallerIds, allEncapsDone })
+      setStep(3)
+    }
+  }, [hydrated, step, epochKeysReady, allEncapsDone, expectedSmallerIds.length, epoch?.isClosed])
 
   // Step 3: auto-decapsulate whenever new ciphertexts arrive
   useEffect(() => {
-    if (!hydrated || step !== 3 || encapBusy || encapError || !keyPair || allDecapsDone) return
+    if (!hydrated || epoch?.isClosed || step !== 3 || encapBusy || encapError || !keyPair || allDecapsDone) return
     if (expectedLargerIds.length === 0) return
+    log('auto: decapsulate', { expectedLargerIds, actualCiphertexts: status?.actualCiphertexts })
     performDecapsulation()
-  }, [hydrated, step, status?.actualCiphertexts, !!keyPair, encapError, allDecapsDone])
+  }, [hydrated, step, status?.actualCiphertexts, !!keyPair, encapError, allDecapsDone, epoch?.isClosed])
 
   // Step 3 → 4: advance when ciphertext exchange is complete and all secrets derived
   useEffect(() => {
-    if (!hydrated || step !== 3) return
+    if (!hydrated || epoch?.isClosed || step !== 3) return
     if (epochPartnerIds.length < 2) return
-    if (expectedLargerIds.length === 0 && exchangeComplete) { setStep(4); return }
-    if (exchangeComplete && allDecapsDone) setStep(4)
-  }, [hydrated, step, exchangeComplete, allDecapsDone, expectedLargerIds.length, epochPartnerIds.length])
+    if (expectedLargerIds.length === 0 && exchangeComplete) {
+      log('step 3 → 4 (nothing to receive, exchange complete)')
+      setStep(4)
+      return
+    }
+    if (exchangeComplete && allDecapsDone) {
+      log('step 3 → 4 (decapsulation complete)')
+      setStep(4)
+    }
+  }, [hydrated, step, exchangeComplete, allDecapsDone, expectedLargerIds.length, epochPartnerIds.length, epoch?.isClosed])
 
-  // ── Render helpers ────────────────────────────────────────────────────────────
-  const dot = (ok) => (
-    <span style={{ color: ok ? '#4ade80' : '#fbbf24', marginRight: 8 }}>{ok ? '✓' : '○'}</span>
-  )
+  const producerCount = epoch?.producerIds?.length ?? status?.expectedCount ?? 0
 
-  const renderStepIndicator = () => (
-    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem', justifyContent: 'center' }}>
-      {STEPS.map((label, i) => {
-        const n = i + 1
-        const active = n === step
-        const done = n < step
-        return (
-          <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: '50%', display: 'flex',
-              alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.875rem',
-              background: done ? '#4ade80' : active ? 'linear-gradient(135deg,#3b82f6,#8b5cf6)' : 'rgba(255,255,255,0.1)',
-              color: done ? '#14532d' : '#fff',
-            }}>
-              {done ? '✓' : n}
-            </div>
-            <span style={{ fontSize: '0.875rem', color: active ? '#fff' : '#71717a', whiteSpace: 'nowrap' }}>
-              {label}
-            </span>
-            {i < STEPS.length - 1 && <div style={{ width: 24, height: 1, background: 'rgba(255,255,255,0.15)' }} />}
+  const setupLabel = () => {
+    if (keyBusy) return 'Generating key…'
+    if (!status?.registeredPartners?.includes(myId)) return 'Registering…'
+    if (!status?.isComplete) return 'Waiting for all producers…'
+    return 'Preparing secure session…'
+  }
+
+  const renderStatusBar = () => (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '1.25rem' }}>
+        <div>
+          <div className="form-label" style={{ marginBottom: 4 }}>Epoch</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '1.35rem', fontWeight: 700 }}>{epoch?.epochId ?? '—'}</span>
+            {epoch?.isClosed && <span className="status-badge pending">Closed</span>}
           </div>
-        )
-      })}
+        </div>
+        <div>
+          <div className="form-label" style={{ marginBottom: 4 }}>Producers</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700 }}>{producerCount}</div>
+        </div>
+        <div>
+          <div className="form-label" style={{ marginBottom: 4 }}>Your OID</div>
+          <code className="text-accent" style={{ fontSize: '0.85rem', wordBreak: 'break-all' }}>{myId || '—'}</code>
+        </div>
+      </div>
     </div>
   )
 
-  // ── Step 1 ────────────────────────────────────────────────────────────────────
-  const renderStep1 = () => (
+  const renderSetup = () => (
     <div className="card animate-fade-in">
       <div className="card-header">
-        <span className="card-icon">🔑</span>
-        <h2 className="card-title">Step 1 — Key Generation & Registration</h2>
-        {keyBusy && <span style={{ marginLeft: 'auto', color: '#60a5fa', fontSize: '0.85rem' }}>⏳ Auto-running…</span>}
+        <span className="card-icon">⏳</span>
+        <h2 className="card-title">{setupLabel()}</h2>
       </div>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        {dot(!!keyPair)} Key pair {keyPair ? 'generated and stored locally' : keyBusy ? 'generating…' : 'pending'}
-        <br />
-        {dot(status?.registeredPartners?.includes(myId))} Public key {status?.registeredPartners?.includes(myId) ? 'registered' : 'pending registration'}
-      </div>
-
-      {status && (
-        <div style={{ marginBottom: '1.5rem' }}>
-          <div style={{ fontWeight: 600, marginBottom: '0.75rem', color: '#d4d4d8' }}>
-            Waiting for all partners to register ({status.registeredCount}/{status.expectedCount})
-          </div>
-          {(status.registeredPartners ?? []).map((id) => (
-            <div key={id} style={{ padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.875rem' }}>
-              {dot(true)} <code style={{ color: '#a78bfa' }}>{id === myId ? `${id} (you)` : id}</code>
-            </div>
-          ))}
-          {(status.missingPartners ?? []).map((id) => (
-            <div key={id} style={{ padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.875rem', color: '#71717a' }}>
-              {dot(false)} <code>{id}</code> — waiting
-            </div>
-          ))}
-        </div>
-      )}
-
-      {keyError && (
-        <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5', marginBottom: '1rem' }}>
-          ⚠️ {keyError}
+      {(keyError || encapError) && (
+        <div className="info-box error" style={{ marginBottom: '1rem' }}>
+          ⚠️ {keyError || encapError}
+          {encapError && (
+            <button
+              className="btn btn-secondary"
+              onClick={step === 2 ? performEncapsulation : performDecapsulation}
+              disabled={encapBusy}
+              style={{ marginLeft: '1rem', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -523,106 +618,24 @@ export default function ProtocolFlow() {
         <button className="btn btn-secondary" onClick={generateAndRegister} disabled={keyBusy} style={{ fontSize: '0.85rem' }}>
           {keyBusy ? '⏳ Working…' : keyPair ? '🔄 Re-register Key' : '⚡ Generate Key'}
         </button>
-        <button className="btn btn-secondary" onClick={resetLocalState} style={{ fontSize: '0.8rem', color: '#f87171' }}>
+        <button className="btn btn-secondary text-danger" onClick={resetLocalState} style={{ fontSize: '0.8rem' }}>
           🗑 Reset Local State
         </button>
       </div>
     </div>
   )
 
-  // ── Step 2 ────────────────────────────────────────────────────────────────────
-  const renderStep2 = () => (
-    <div className="card animate-fade-in">
-      <div className="card-header">
-        <span className="card-icon">📤</span>
-        <h2 className="card-title">Step 2 — Encapsulation</h2>
-        {encapBusy && <span style={{ marginLeft: 'auto', color: '#60a5fa', fontSize: '0.85rem' }}>⏳ Auto-running…</span>}
-      </div>
-
-      {smallerIdPartners.length === 0 ? (
-        <div className="info-box" style={{ background: 'rgba(74,222,128,0.1)', borderColor: 'rgba(74,222,128,0.3)', color: '#86efac' }}>
-          {epochKeysReady
-            ? '✨ You have the smallest producer ID — nothing to send. Advancing to Step 3…'
-            : '⏳ Waiting for every epoch partner to register a public key…'}
-        </div>
-      ) : (
-        smallerIdPartners.map((pk) => (
-          <div key={pk.producerId} style={{ display: 'flex', alignItems: 'center', padding: '0.75rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)', gap: '0.75rem' }}>
-            {dot(sentTo.has(pk.producerId))}
-            <code style={{ color: '#a78bfa', flex: 1 }}>{pk.producerId}</code>
-            <span className={`status-badge ${sentTo.has(pk.producerId) ? 'success' : 'pending'}`}>
-              {sentTo.has(pk.producerId) ? 'Sent ✓' : encapBusy ? 'Sending…' : 'Pending'}
-            </span>
-          </div>
-        ))
-      )}
-
-      {encapError && (
-        <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5', marginTop: '1rem' }}>
-          ⚠️ {encapError}
-          <button className="btn btn-secondary" onClick={performEncapsulation} disabled={encapBusy}
-            style={{ marginLeft: '1rem', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}>Retry</button>
-        </div>
-      )}
-    </div>
-  )
-
-  // ── Step 3 ────────────────────────────────────────────────────────────────────
-  const renderStep3 = () => (
-    <div className="card animate-fade-in">
-      <div className="card-header">
-        <span className="card-icon">📥</span>
-        <h2 className="card-title">Step 3 — Decapsulation</h2>
-        {encapBusy && <span style={{ marginLeft: 'auto', color: '#60a5fa', fontSize: '0.85rem' }}>⏳ Auto-running…</span>}
-        {!encapBusy && !exchangeComplete && <span style={{ marginLeft: 'auto', color: '#71717a', fontSize: '0.85rem' }}>🔄 Polling for ciphertexts…</span>}
-      </div>
-
-      {largerIdPartners.length === 0 ? (
-        <div className="info-box" style={{ background: 'rgba(74,222,128,0.1)', borderColor: 'rgba(74,222,128,0.3)', color: '#86efac' }}>
-          ✨ You have the largest producer ID — nothing to receive.
-        </div>
-      ) : (
-        largerIdPartners.map((pk) => (
-          <div key={pk.producerId} style={{ display: 'flex', alignItems: 'center', padding: '0.75rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)', gap: '0.75rem' }}>
-            {dot(sharedSecrets.has(pk.producerId))}
-            <code style={{ color: '#a78bfa', flex: 1 }}>{pk.producerId}</code>
-            <span className={`status-badge ${sharedSecrets.has(pk.producerId) ? 'success' : 'pending'}`}>
-              {sharedSecrets.has(pk.producerId) ? 'Secret derived ✓' : encapBusy ? 'Decapsulating…' : 'Waiting for ciphertext'}
-            </span>
-          </div>
-        ))
-      )}
-
-      {status && (
-        <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: 8, fontSize: '0.875rem' }}>
-          Ciphertexts received: {status.actualCiphertexts}/{status.expectedCiphertexts} &nbsp;·&nbsp;
-          Exchange complete: {exchangeComplete ? '✅' : '⏳ waiting'}
-        </div>
-      )}
-
-      {encapError && (
-        <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5', marginTop: '1rem' }}>
-          ⚠️ {encapError}
-          <button className="btn btn-secondary" onClick={performDecapsulation} disabled={encapBusy}
-            style={{ marginLeft: '1rem', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}>Retry</button>
-        </div>
-      )}
-    </div>
-  )
-
-  const renderStep4 = () => {
+  const renderSubmit = () => {
     const months = epochMonths(epoch)
     const allDone = COUNTRIES.every((c) => months.every((m) => submittedCells.has(`${c}|${m}`)))
     return (
       <div className="card animate-fade-in">
         <div className="card-header">
           <span className="card-icon">📊</span>
-          <h2 className="card-title">Step 4 — Submit Data</h2>
-          {epoch && (
-            <span style={{ marginLeft: 'auto', color: '#71717a', fontSize: '0.875rem' }}>
-              Epoch {epoch.epochId} · {months[0]} – {months[2]}
-            </span>
-          )}
+          <h2 className="card-title">Submit Data</h2>
+          <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.875rem' }}>
+            {months[0]} – {months[2]}
+          </span>
         </div>
 
         <div className="info-box">
@@ -631,7 +644,7 @@ export default function ProtocolFlow() {
         </div>
 
         {cellErrors._load && (
-          <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5' }}>
+          <div className="info-box error">
             ⚠️ {cellErrors._load}
           </div>
         )}
@@ -647,7 +660,7 @@ export default function ProtocolFlow() {
             <tbody>
               {COUNTRIES.map((country) => (
                 <tr key={country}>
-                  <td style={{ fontWeight: 600, color: '#d4d4d8' }}>{country}</td>
+                  <td className="text-strong" style={{ fontWeight: 600 }}>{country}</td>
                   {months.map((month) => {
                     const id = `${country}|${month}`
                     const done = submittedCells.has(id)
@@ -669,8 +682,8 @@ export default function ProtocolFlow() {
                             disabled={busy}
                           />
                         )}
-                        {busy && <div style={{ color: '#71717a', fontSize: '0.75rem', marginTop: 4 }}>submitting…</div>}
-                        {err && <div style={{ color: '#f87171', fontSize: '0.75rem', marginTop: 4 }}>{err}</div>}
+                        {busy && <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: 4 }}>submitting…</div>}
+                        {err && <div className="text-danger" style={{ fontSize: '0.75rem', marginTop: 4 }}>{err}</div>}
                       </td>
                     )
                   })}
@@ -681,34 +694,39 @@ export default function ProtocolFlow() {
         </div>
 
         {allDone ? (
-          <div className="info-box" style={{ background: 'rgba(74,222,128,0.1)', borderColor: 'rgba(74,222,128,0.3)', color: '#86efac' }}>
-            ✅ All {COUNTRIES.length * months.length} cells submitted! Ask your admin to check the aggregate results.
+          <div className="info-box ok">
+            ✅ All {COUNTRIES.length * months.length} cells submitted. Waiting for the remaining producers…
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button className="btn btn-secondary" onClick={() => setStep(3)}>← Back</button>
-            <button className="btn btn-primary" onClick={submitAll}>
-              ⚡ Submit All
-            </button>
-          </div>
+          <button className="btn btn-primary" onClick={submitAll}>
+            ⚡ Submit All
+          </button>
         )}
       </div>
     )
   }
 
+  const renderWaiting = () => (
+    <div className="card animate-fade-in">
+      <div className="card-header">
+        <span className="card-icon">✅</span>
+        <h2 className="card-title">Waiting for a new epoch</h2>
+      </div>
+      <div className="info-box">
+        Epoch {epoch?.epochId} is closed — every producer has submitted. This page will continue when an admin creates a new epoch.
+      </div>
+    </div>
+  )
+
   return (
     <div className="animate-fade-in">
       <div className="page-header">
-        <h1 className="page-title">Protocol Flow</h1>
-        <p className="page-subtitle">ML-KEM-768 pairwise key exchange and privacy-preserving metric submission</p>
+        <h1 className="page-title">Protocol</h1>
+        <p className="page-subtitle">Submit privacy-preserving metrics for the current epoch</p>
       </div>
 
-      {renderStepIndicator()}
-
-      {step === 1 && renderStep1()}
-      {step === 2 && renderStep2()}
-      {step === 3 && renderStep3()}
-      {step === 4 && renderStep4()}
+      {renderStatusBar()}
+      {epoch?.isClosed ? renderWaiting() : step < 4 ? renderSetup() : renderSubmit()}
     </div>
   )
 }

@@ -79,4 +79,6 @@ export const adminReset = (token) => post('/admin/reset', {}, token)
 export const adminResetAndCreateEpoch = (body, token) =>
   post('/admin/producers/reset-and-create-epoch', body, token)
 
-export const adminGetAggregates = (token) => get('/admin/aggregates-latest-epoch', token)
+export const adminGetEpochs = (token) => get('/admin/epochs', token)
+
+export const adminGetEpochDetail = (epochId, token) => get(`/admin/epochs/${epochId}`, token)

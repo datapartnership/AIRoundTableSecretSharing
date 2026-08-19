@@ -61,9 +61,9 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Replaces all producers with the submitted list and creates a fresh epoch.
-    /// Also clears submissions, keys, and ciphertexts to ensure protocol consistency.
-    /// Epoch start date is normalized to the first day of next month.
+    /// Replaces the active epoch with a new one for the submitted producers.
+    /// Previous epochs and their submissions are kept. Keys and ciphertexts are cleared
+    /// so the new round can run key exchange.
     /// </summary>
     [HttpPost("producers/reset-and-create-epoch")]
     [ProducesResponseType(typeof(ReplaceProducersResponse), 200)]
@@ -105,14 +105,12 @@ public class AdminController : ControllerBase
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            await _submissionRepo.ClearAllAsync();
             await _ciphertextRepo.ClearAsync();
             await _keyRepo.ClearAsync();
-            await _producerRepo.ClearAllAsync();
 
             foreach (var item in normalizedProducers)
             {
-                await _producerRepo.AddProducerAsync(new ProducerInfo
+                await _producerRepo.UpsertProducerAsync(new ProducerInfo
                 {
                     ProducerId = item.ProducerId,
                     DisplayName = item.DisplayName,
@@ -128,26 +126,26 @@ public class AdminController : ControllerBase
 
             var epoch = new ProducerEpoch
             {
-                // Use Unix timestamp so each reset gets a unique, ever-increasing ID
                 EpochId = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 StartDate = startDate,
                 EndDate = null,
                 ProducerIds = sortedProducerIds,
-                ProducerCount = sortedProducerIds.Count
+                ProducerCount = sortedProducerIds.Count,
+                IsClosed = false
             };
 
-            await _producerRepo.AddEpochAsync(epoch);
+            await _producerRepo.CreateEpochAsync(epoch);
             await tx.CommitAsync();
 
             _logger.LogInformation(
-                "Producer replacement complete. Created epoch {EpochId} effective {StartDate} with {Count} producers.",
+                "Created epoch {EpochId} effective {StartDate} with {Count} producers. Previous epochs kept.",
                 epoch.EpochId,
                 epoch.StartDate,
                 epoch.ProducerCount);
 
             return Ok(new ReplaceProducersResponse
             {
-                Message = "Producers replaced and new epoch created.",
+                Message = "New epoch created. Previous epoch data was kept.",
                 Epoch = epoch,
                 Producers = sortedProducerIds
             });
@@ -192,15 +190,51 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Returns all country/month aggregates for the latest active epoch, including both complete
-    /// (all partners submitted) and incomplete (missing submissions) states.
+    /// Returns every epoch, newest first.
+    /// </summary>
+    [HttpGet("epochs")]
+    [ProducesResponseType(typeof(EpochListResponse), 200)]
+    public async Task<ActionResult<EpochListResponse>> GetEpochs()
+    {
+        var epochs = await _producerRepo.GetAllEpochsAsync();
+        return Ok(new EpochListResponse
+        {
+            Epochs = epochs.Select(e => new EpochSummary
+            {
+                EpochId = e.EpochId,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                ProducerCount = e.ProducerCount,
+                IsClosed = e.IsClosed
+            }).ToList()
+        });
+    }
+
+    /// <summary>
+    /// Epoch detail: missing submitters always, aggregates only when every required cell is present.
+    /// </summary>
+    [HttpGet("epochs/{epochId:int}")]
+    [ProducesResponseType(typeof(EpochDetailResponse), 200)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<EpochDetailResponse>> GetEpochDetail(int epochId)
+    {
+        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
+        if (epoch == null)
+            return NotFound(new { error = "Epoch not found" });
+
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        return Ok(await BuildEpochDetailAsync(epoch));
+    }
+
+    /// <summary>
+    /// Returns country/month aggregates for the latest active epoch.
+    /// Aggregates are omitted when any required submission is missing.
     /// </summary>
     [HttpGet("aggregates-latest-epoch")]
-    [ProducesResponseType(typeof(LatestEpochAggregatesResponse), 200)]
+    [ProducesResponseType(typeof(EpochDetailResponse), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<LatestEpochAggregatesResponse>> GetLatestEpochAggregates()
+    public async Task<ActionResult<EpochDetailResponse>> GetLatestEpochAggregates()
     {
-        // Get the latest active epoch (current date)
         var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
         if (epoch == null)
         {
@@ -208,70 +242,69 @@ public class AdminController : ControllerBase
             return NotFound(new { error = "No active epoch found" });
         }
 
-        // Retrieve all distinct (country, month) pairs with submissions in this epoch
-        var countryMonthPairs = await _submissionRepo.GetDistinctCountryMonthPairsAsync(epoch.EpochId);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        return Ok(await BuildEpochDetailAsync(epoch));
+    }
 
-        if (countryMonthPairs.Count == 0)
-        {
-            _logger.LogInformation("No submissions found for epoch {EpochId}. Returning empty aggregates list.", epoch.EpochId);
-            return Ok(new LatestEpochAggregatesResponse
+    private async Task<EpochDetailResponse> BuildEpochDetailAsync(ProducerEpoch epoch)
+    {
+        var submissions = await _submissionRepo.GetSubmissionsByEpochAsync(epoch.EpochId);
+        var missingCells = EpochGrid.MissingCells(epoch, submissions);
+        var names = (await _producerRepo.GetProducersByIdsAsync(epoch.ProducerIds))
+            .ToDictionary(p => p.ProducerId, p => p.DisplayName, StringComparer.Ordinal);
+
+        string NameOf(string id) => names.TryGetValue(id, out var n) && !string.IsNullOrWhiteSpace(n) ? n : id;
+
+        var partners = epoch.ProducerIds
+            .Select(id => new EpochPartnerInfo { ProducerId = id, DisplayName = NameOf(id) })
+            .ToList();
+
+        var missingProducers = missingCells
+            .GroupBy(m => m.ProducerId)
+            .Select(g => new MissingProducerStatus
             {
-                EpochId = epoch.EpochId,
-                StartDate = epoch.StartDate,
-                PartnerCount = epoch.ProducerCount,
-                Partners = epoch.ProducerIds,
-                Aggregates = new List<AggregationResult>()
-            });
-        }
+                ProducerId = g.Key,
+                DisplayName = NameOf(g.Key),
+                MissingCells = g.Select(c => new SubmittedEntry { Country = c.Country, Month = c.Month }).ToList()
+            })
+            .ToList();
 
-        // For each (country, month) pair, compute the AggregationResult
         var aggregates = new List<AggregationResult>();
-        foreach (var (country, month) in countryMonthPairs)
+        if (missingCells.Count == 0 && epoch.ProducerIds.Count > 0)
         {
-            var submissions = await _submissionRepo.GetSubmissionsAsync(country, month, epoch.EpochId);
-            var submittedProducers = submissions.Select(s => s.ProducerId).ToHashSet();
-            var missingProducers = epoch.ProducerIds.Except(submittedProducers).ToList();
-
-            if (missingProducers.Any())
+            foreach (var country in EpochGrid.Countries)
             {
-                aggregates.Add(new AggregationResult
+                foreach (var month in EpochGrid.Months(epoch.StartDate))
                 {
-                    Status = "incomplete",
-                    Country = country,
-                    Month = month,
-                    Total = null,
-                    SubmissionCount = submissions.Count,
-                    ExpectedSubmissions = epoch.ProducerCount,
-                    MissingProducers = missingProducers
-                });
-            }
-            else
-            {
-                // All submissions received - compute aggregate
-                long total = submissions.Sum(s => s.Value);
-                aggregates.Add(new AggregationResult
-                {
-                    Status = "complete",
-                    Country = country,
-                    Month = month,
-                    Total = total,
-                    SubmissionCount = submissions.Count,
-                    ExpectedSubmissions = epoch.ProducerCount,
-                    MissingProducers = new List<string>()
-                });
+                    var cell = submissions.Where(s => s.Country == country && s.Month == month).ToList();
+                    aggregates.Add(new AggregationResult
+                    {
+                        Status = "complete",
+                        Country = country,
+                        Month = month,
+                        Total = cell.Sum(s => s.Value),
+                        SubmissionCount = cell.Count,
+                        ExpectedSubmissions = epoch.ProducerCount,
+                        MissingProducers = new List<string>()
+                    });
+                }
             }
         }
 
-        _logger.LogInformation("Returning {Count} aggregates for epoch {EpochId}. Complete: {CompleteCount}, Incomplete: {IncompleteCount}",
-            aggregates.Count, epoch.EpochId, aggregates.Count(a => a.Status == "complete"), aggregates.Count(a => a.Status == "incomplete"));
+        _logger.LogInformation(
+            "Epoch {EpochId} detail: missing {MissingCount} cells from {MissingProducers} producers; aggregates={HasAggregates}",
+            epoch.EpochId, missingCells.Count, missingProducers.Count, aggregates.Count > 0);
 
-        return Ok(new LatestEpochAggregatesResponse
+        return new EpochDetailResponse
         {
             EpochId = epoch.EpochId,
             StartDate = epoch.StartDate,
+            EndDate = epoch.EndDate,
             PartnerCount = epoch.ProducerCount,
-            Partners = epoch.ProducerIds,
+            IsClosed = epoch.IsClosed,
+            Partners = partners,
+            MissingProducers = missingProducers,
             Aggregates = aggregates
-        });
+        };
     }
 }

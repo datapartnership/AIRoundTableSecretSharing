@@ -15,6 +15,7 @@ export default function Home() {
           <strong> not even the aggregator can see individual values</strong>. Powered by ML-KEM-768
           (post-quantum key encapsulation) and HMAC-SHA256 noise cancellation.
         </p>
+        <div className="line" />
         {isAuthenticated ? (
           <Link to="/flow" className="btn btn-primary">🚀 Start Protocol</Link>
         ) : (

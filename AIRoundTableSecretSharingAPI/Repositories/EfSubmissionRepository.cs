@@ -36,6 +36,11 @@ public class EfSubmissionRepository : ISubmissionRepository
             .Where(s => s.ProducerId == producerId && s.EpochId == epochId)
             .ToListAsync();
 
+    public Task<List<MetricSubmission>> GetSubmissionsByEpochAsync(int epochId) =>
+        _db.Submissions
+            .Where(s => s.EpochId == epochId)
+            .ToListAsync();
+
     public async Task<List<(string country, string month)>> GetDistinctCountryMonthPairsAsync(int epochId) =>
         await _db.Submissions
             .Where(s => s.EpochId == epochId)

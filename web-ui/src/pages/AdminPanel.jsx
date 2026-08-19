@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { useMsal } from '@azure/msal-react'
 import * as api from '../utils/api'
 
+function formatEpochDate(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
 export default function AdminPanel() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
@@ -29,10 +36,14 @@ export default function AdminPanel() {
   const [clearBusy, setClearBusy] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
 
-  // ── Aggregates ──────────────────────────────────────────────────────────────
-  const [aggregates, setAggregates] = useState(null)
-  const [aggLoading, setAggLoading] = useState(false)
-  const [aggError, setAggError] = useState(null)
+  // ── Epochs ──────────────────────────────────────────────────────────────────
+  const [epochs, setEpochs] = useState([])
+  const [epochsLoading, setEpochsLoading] = useState(false)
+  const [epochsError, setEpochsError] = useState(null)
+  const [selectedEpochId, setSelectedEpochId] = useState(null)
+  const [epochDetail, setEpochDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState(null)
 
   const loadRegistered = useCallback(async () => {
     setRegLoading(true)
@@ -48,24 +59,52 @@ export default function AdminPanel() {
     }
   }, [instance, account])
 
-  const loadAggregates = useCallback(async () => {
-    setAggLoading(true)
-    setAggError(null)
+  const loadEpochs = useCallback(async () => {
+    setEpochsLoading(true)
+    setEpochsError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
-      const data = await api.adminGetAggregates(token)
-      setAggregates(data)
+      const data = await api.adminGetEpochs(token)
+      const list = data.epochs ?? []
+      setEpochs(list)
+      setSelectedEpochId((prev) => {
+        if (prev && list.some((e) => e.epochId === prev)) return prev
+        return list[0]?.epochId ?? null
+      })
     } catch (e) {
-      setAggError(e.message)
+      setEpochsError(e.message)
     } finally {
-      setAggLoading(false)
+      setEpochsLoading(false)
+    }
+  }, [instance, account])
+
+  const loadEpochDetail = useCallback(async (epochId) => {
+    if (!epochId) {
+      setEpochDetail(null)
+      return
+    }
+    setDetailLoading(true)
+    setDetailError(null)
+    try {
+      const token = await api.acquireApiToken(instance, account)
+      const data = await api.adminGetEpochDetail(epochId, token)
+      setEpochDetail(data)
+    } catch (e) {
+      setEpochDetail(null)
+      setDetailError(e.message)
+    } finally {
+      setDetailLoading(false)
     }
   }, [instance, account])
 
   useEffect(() => {
     loadRegistered()
-    loadAggregates()
+    loadEpochs()
   }, [])
+
+  useEffect(() => {
+    loadEpochDetail(selectedEpochId)
+  }, [selectedEpochId, loadEpochDetail])
 
   const toggleSelect = (id) => setSelected((prev) => {
     const next = new Set(prev)
@@ -94,8 +133,9 @@ export default function AdminPanel() {
       const data = await api.adminResetAndCreateEpoch({ startMonth, producers }, token)
       setEpochResult(data)
       setSelected(new Set())
-      loadRegistered()
-      loadAggregates()
+      await loadRegistered()
+      await loadEpochs()
+      if (data.epoch?.epochId) setSelectedEpochId(data.epoch.epochId)
     } catch (e) {
       setEpochError(e.message)
     } finally {
@@ -111,7 +151,9 @@ export default function AdminPanel() {
       await api.adminReset(token)
       setRegistered([])
       setSelected(new Set())
-      setAggregates(null)
+      setEpochs([])
+      setSelectedEpochId(null)
+      setEpochDetail(null)
     } catch (e) {
       setRegError(e.message)
     } finally {
@@ -148,13 +190,13 @@ export default function AdminPanel() {
         </div>
 
         {regError && (
-          <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5', marginBottom: '0.75rem' }}>
+          <div className="info-box error" style={{ marginBottom: '0.75rem' }}>
             ⚠️ {regError}
           </div>
         )}
 
         {registered.length === 0 && !regLoading ? (
-          <div style={{ color: '#71717a', textAlign: 'center', padding: '1.5rem 0' }}>
+          <div className="text-muted" style={{ textAlign: 'center', padding: '1.5rem 0' }}>
             No partners registered yet. Partners must log in and visit the Protocol page first.
           </div>
         ) : (
@@ -177,8 +219,8 @@ export default function AdminPanel() {
                       onChange={() => toggleSelect(p.producerId)} />
                   </td>
                   <td style={{ fontWeight: 600 }}>{p.displayName}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#a1a1aa' }}>{p.producerId}</td>
-                  <td style={{ color: '#71717a', fontSize: '0.85rem' }}>
+                  <td className="text-muted" style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{p.producerId}</td>
+                  <td className="text-muted" style={{ fontSize: '0.85rem' }}>
                     {p.joinedDate ? new Date(p.joinedDate).toLocaleDateString() : '—'}
                   </td>
                 </tr>
@@ -188,15 +230,15 @@ export default function AdminPanel() {
         )}
 
         {/* Clear All Data */}
-        <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+        <div style={{ borderTop: '1px solid var(--gray-200)', paddingTop: '1rem', marginTop: '0.5rem' }}>
           {!clearConfirm ? (
-            <button className="btn btn-secondary" style={{ fontSize: '0.8rem', color: '#f87171' }}
+            <button className="btn btn-secondary" className="text-danger" style={{ fontSize: '0.8rem' }}
               onClick={() => setClearConfirm(true)}>
               🗑 Clear All Data
             </button>
           ) : (
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-              <span style={{ color: '#fde047', fontSize: '0.875rem' }}>Wipes all producers, keys, ciphertexts and submissions.</span>
+              <span className="text-danger" style={{ fontSize: '0.875rem' }}>Wipes all producers, keys, ciphertexts and submissions.</span>
               <button className="btn btn-primary" onClick={handleClearAll} disabled={clearBusy}>
                 {clearBusy ? '⏳' : '⚠️ Confirm Clear'}
               </button>
@@ -212,8 +254,9 @@ export default function AdminPanel() {
           <span className="card-icon">🔄</span>
           <h2 className="card-title">Create Epoch</h2>
         </div>
-        <div className="info-box" style={{ background: 'rgba(251,191,36,0.1)', borderColor: 'rgba(251,191,36,0.3)', color: '#fde047', marginBottom: '1rem' }}>
-          ⚠️ This wipes ALL existing protocol data (keys, ciphertexts, submissions) and starts a fresh epoch with the selected partners.
+        <div className="info-box warn" style={{ marginBottom: '1rem' }}>
+          ⚠️ Starts a new epoch with the selected partners. Previous epochs and their submissions are kept.
+          Keys and ciphertexts are cleared so partners re-run key exchange.
         </div>
 
         <div className="form-group">
@@ -223,34 +266,34 @@ export default function AdminPanel() {
         </div>
 
         {selected.size === 0 ? (
-          <div style={{ color: '#71717a', padding: '0.75rem 0' }}>
+          <div className="text-muted" style={{ padding: '0.75rem 0' }}>
             Select at least 2 partners above to continue.
           </div>
         ) : (
-          <div style={{ marginBottom: '1rem', color: '#a1a1aa', fontSize: '0.875rem' }}>
+          <div className="text-muted" style={{ marginBottom: '1rem', fontSize: '0.875rem' }}>
             {selected.size} partner{selected.size !== 1 ? 's' : ''} selected: {selectedList.map(p => p.displayName).join(', ')}
           </div>
         )}
 
         {epochError && (
-          <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5', marginBottom: '0.75rem' }}>
+          <div className="info-box error" style={{ marginBottom: '0.75rem' }}>
             ⚠️ {epochError}
           </div>
         )}
 
         {epochResult && (
-          <div className="info-box" style={{ background: 'rgba(74,222,128,0.1)', borderColor: 'rgba(74,222,128,0.3)', color: '#86efac', marginBottom: '0.75rem' }}>
+          <div className="info-box ok" style={{ marginBottom: '0.75rem' }}>
             ✅ Epoch {epochResult.epoch?.epochId} created with {epochResult.producers?.length} producers.
           </div>
         )}
 
         {!confirmReset ? (
           <button className="btn btn-primary" onClick={() => setConfirmReset(true)} disabled={!canCreateEpoch}>
-            🔄 Reset & Create Epoch
+            🔄 Create Epoch
           </button>
         ) : (
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-            <span style={{ color: '#fde047' }}>Are you sure? All protocol data will be deleted.</span>
+            <span className="text-danger">Create a new epoch? Keys and ciphertexts will be reset; past epochs stay.</span>
             <button className="btn btn-primary" onClick={handleCreateEpoch} disabled={epochBusy}>
               {epochBusy ? '⏳ Working…' : '⚠️ Confirm'}
             </button>
@@ -259,60 +302,122 @@ export default function AdminPanel() {
         )}
       </div>
 
-      {/* Aggregates */}
+      {/* Epochs */}
       <div className="card">
         <div className="card-header">
-          <span className="card-icon">📊</span>
-          <h2 className="card-title">Latest Epoch Aggregates</h2>
+          <span className="card-icon">📅</span>
+          <h2 className="card-title">Epochs</h2>
           <button className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-            onClick={loadAggregates} disabled={aggLoading}>
-            {aggLoading ? '⏳' : '↻ Refresh'}
+            onClick={loadEpochs} disabled={epochsLoading}>
+            {epochsLoading ? '⏳' : '↻ Refresh'}
           </button>
         </div>
 
-        {aggError && (
-          <div className="info-box" style={{ background: 'rgba(248,113,113,0.1)', borderColor: 'rgba(248,113,113,0.3)', color: '#fca5a5' }}>
-            ⚠️ {aggError}
+        {epochsError && (
+          <div className="info-box error">
+            ⚠️ {epochsError}
           </div>
         )}
 
-        {aggregates && (
+        {epochs.length === 0 && !epochsLoading ? (
+          <div className="text-muted" style={{ textAlign: 'center', padding: '1rem' }}>No epochs yet.</div>
+        ) : (
+          <table className="results-table" style={{ marginBottom: epochDetail || detailLoading ? '1.5rem' : 0 }}>
+            <thead>
+              <tr>
+                <th>Epoch</th>
+                <th>Producers</th>
+                <th>Date</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {epochs.map((e) => (
+                <tr
+                  key={e.epochId}
+                  className={`clickable${selectedEpochId === e.epochId ? ' selected' : ''}`}
+                  onClick={() => setSelectedEpochId(e.epochId)}
+                >
+                  <td style={{ fontWeight: 600 }}>{e.epochId}</td>
+                  <td>{e.producerCount}</td>
+                  <td>{formatEpochDate(e.startDate)}</td>
+                  <td>
+                    <span className={`status-badge ${e.isClosed ? 'pending' : 'success'}`}>
+                      {e.isClosed ? 'Closed' : 'Open'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {detailError && (
+          <div className="info-box error">
+            ⚠️ {detailError}
+          </div>
+        )}
+
+        {detailLoading && <div className="text-muted" style={{ padding: '0.5rem 0' }}>Loading epoch…</div>}
+
+        {epochDetail && !detailLoading && (
           <>
-            <div style={{ color: '#71717a', fontSize: '0.875rem', marginBottom: '1rem' }}>
-              Epoch {aggregates.epochId} · {aggregates.partnerCount} partners: {aggregates.partners?.join(', ')}
+            <div className="text-muted" style={{ fontSize: '0.875rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span className="text-strong" style={{ fontWeight: 600 }}>Epoch {epochDetail.epochId}</span>
+              {epochDetail.isClosed && <span className="status-badge pending">Closed</span>}
+              <span>· {epochDetail.partnerCount} producers</span>
             </div>
 
-            {aggregates.aggregates?.length > 0 ? (
+            {epochDetail.missingProducers?.length > 0 ? (
+              <>
+                <div className="info-box warn">
+                  Aggregates are hidden until every producer has submitted every cell.
+                </div>
+                <div className="text-strong" style={{ fontWeight: 600, marginBottom: '0.75rem' }}>Has not submitted</div>
+                <table className="results-table">
+                  <thead>
+                    <tr>
+                      <th>Producer</th>
+                      <th>OID</th>
+                      <th>Missing cells</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {epochDetail.missingProducers.map((p) => (
+                      <tr key={p.producerId}>
+                        <td style={{ fontWeight: 600, fontFamily: 'Inter, sans-serif' }}>{p.displayName}</td>
+                        <td className="text-muted" style={{ fontSize: '0.8rem' }}>{p.producerId}</td>
+                        <td style={{ fontSize: '0.8rem' }}>
+                          {(p.missingCells ?? []).map((c) => `${c.country} ${c.month}`).join(', ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : epochDetail.aggregates?.length > 0 ? (
               <table className="results-table">
                 <thead>
                   <tr>
                     <th>Country</th>
                     <th>Month</th>
-                    <th>Status</th>
                     <th>Total</th>
                     <th>Submissions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aggregates.aggregates.map((r) => (
+                  {epochDetail.aggregates.map((r) => (
                     <tr key={`${r.country}-${r.month}`}>
                       <td style={{ fontWeight: 600 }}>{r.country}</td>
                       <td>{r.month}</td>
-                      <td>
-                        <span className={`status-badge ${r.status === 'complete' ? 'success' : 'pending'}`}>
-                          {r.status}
-                        </span>
-                      </td>
-                      <td style={{ color: r.status === 'complete' ? '#4ade80' : '#71717a' }}>
-                        {r.total != null ? r.total.toLocaleString() : '—'}
-                      </td>
+                      <td className="text-success">{r.total != null ? r.total.toLocaleString() : '—'}</td>
                       <td>{r.submissionCount}/{r.expectedSubmissions}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             ) : (
-              <div style={{ color: '#71717a', textAlign: 'center', padding: '1rem' }}>No submissions yet.</div>
+              <div className="text-muted" style={{ textAlign: 'center', padding: '1rem' }}>No producers in this epoch.</div>
             )}
           </>
         )}

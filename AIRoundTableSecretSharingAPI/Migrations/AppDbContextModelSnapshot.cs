@@ -128,6 +128,9 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<DateTime?>("EndDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool>("IsClosed")
+                        .HasColumnType("bit");
+
                     b.Property<int>("ProducerCount")
                         .HasColumnType("int");
 

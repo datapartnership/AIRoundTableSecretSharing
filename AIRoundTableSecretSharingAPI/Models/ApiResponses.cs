@@ -72,5 +72,45 @@ public class LatestEpochAggregatesResponse
     public DateTime StartDate { get; set; }
     public int PartnerCount { get; set; }
     public List<string> Partners { get; set; } = new();
+    public bool IsClosed { get; set; }
+    public List<AggregationResult> Aggregates { get; set; } = new();
+}
+
+public class EpochSummary
+{
+    public int EpochId { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public int ProducerCount { get; set; }
+    public bool IsClosed { get; set; }
+}
+
+public class EpochListResponse
+{
+    public List<EpochSummary> Epochs { get; set; } = new();
+}
+
+public class EpochPartnerInfo
+{
+    public string ProducerId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public class MissingProducerStatus
+{
+    public string ProducerId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public List<SubmittedEntry> MissingCells { get; set; } = new();
+}
+
+public class EpochDetailResponse
+{
+    public int EpochId { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public int PartnerCount { get; set; }
+    public bool IsClosed { get; set; }
+    public List<EpochPartnerInfo> Partners { get; set; } = new();
+    public List<MissingProducerStatus> MissingProducers { get; set; } = new();
     public List<AggregationResult> Aggregates { get; set; } = new();
 }

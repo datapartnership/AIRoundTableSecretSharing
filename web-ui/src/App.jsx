@@ -4,8 +4,8 @@ import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import Home from './pages/Home'
 import ProtocolFlow from './pages/ProtocolFlow'
 import AdminPanel from './pages/AdminPanel'
-import Results from './pages/Results'
 import { loginRequest, apiTokenRequest } from './authConfig'
+import { APP_VERSION } from './version'
 
 // Azure AD group IDs from appsettings.json
 const ADMIN_GROUP = '962dafa7-7ec1-43c3-bb67-235d64f9582f'
@@ -35,6 +35,10 @@ function App() {
 
   const handleLogin = () => instance.loginRedirect(loginRequest)
   const handleLogout = () => instance.logoutRedirect()
+  const email = account?.username
+    || account?.idTokenClaims?.preferred_username
+    || account?.idTokenClaims?.email
+    || ''
 
   return (
     <div className="app">
@@ -43,6 +47,7 @@ function App() {
           <NavLink to="/" className="logo">
             <span className="logo-icon">🔐</span>
             AI Roundtable
+            <span className="app-version">{APP_VERSION}</span>
           </NavLink>
           <div className="nav-links">
             <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
@@ -58,16 +63,11 @@ function App() {
                 Admin
               </NavLink>
             )}
-            {isAuthenticated && (
-              <NavLink to="/results" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                Results
-              </NavLink>
-            )}
           </div>
           <div className="nav-auth">
             {isAuthenticated ? (
               <>
-                <span className="nav-user">{account?.name ?? account?.username}</span>
+                <span className="nav-user" title={email}>{email}</span>
                 <button className="btn btn-secondary nav-btn" onClick={handleLogout}>Sign out</button>
               </>
             ) : (
@@ -82,10 +82,16 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/flow" element={isAuthenticated ? <ProtocolFlow /> : <Navigate to="/" replace />} />
           <Route path="/admin" element={isAuthenticated ? <AdminPanel /> : <Navigate to="/" replace />} />
-          <Route path="/results" element={isAuthenticated ? <Results /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+
+      <footer className="site-footer">
+        <div className="footer-bottom">
+          <span>AI Roundtable</span>
+          <span className="app-version">{APP_VERSION}</span>
+        </div>
+      </footer>
     </div>
   )
 }

@@ -7,4 +7,6 @@ public class ProducerEpoch
     public DateTime? EndDate { get; set; }
     public List<string> ProducerIds { get; set; } = new List<string>();
     public int ProducerCount { get; set; }
+    /// <summary>True once every producer has submitted every required country/month cell.</summary>
+    public bool IsClosed { get; set; }
 }
