@@ -34,6 +34,7 @@ public class CiphertextController : ControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
     public async Task<ActionResult<MessageResponse>> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
         // Identity comes from the token; body field is ignored
@@ -58,6 +59,18 @@ public class CiphertextController : ControllerBase
             return BadRequest("CiphertextBase64 is not valid Base64.");
         }
 
+        var existing = await _ciphertextRepo.GetAsync(request.SenderId, request.RecipientId);
+        if (existing != null)
+        {
+            if (existing.CiphertextBase64 == request.CiphertextBase64)
+                return Ok(new MessageResponse { Message = "Ciphertext already stored." });
+
+            return Conflict(new
+            {
+                error = "A ciphertext for this pair already exists. Recreate the epoch to start a new key exchange."
+            });
+        }
+
         var ct = new PartnerCiphertext
         {
             SenderId = request.SenderId,
@@ -76,21 +89,42 @@ public class CiphertextController : ControllerBase
     }
 
     /// <summary>
-    /// Retrieve all ciphertexts addressed to a given partner. Called by the smaller partner to decapsulate.
+    /// Retrieve ciphertexts this caller previously posted (for local-state recovery).
+    /// </summary>
+    [HttpGet("sent")]
+    [ProducesResponseType(typeof(CiphertextResponse), 200)]
+    [ProducesResponseType(401)]
+    public async Task<ActionResult<CiphertextResponse>> GetSentCiphertexts()
+    {
+        var senderId = User.GetOid();
+        if (string.IsNullOrEmpty(senderId))
+            return Unauthorized();
+
+        var ciphertexts = await _ciphertextRepo.GetForSenderAsync(senderId);
+        return Ok(new CiphertextResponse { Ciphertexts = ciphertexts });
+    }
+
+    /// <summary>
+    /// Retrieve ciphertexts addressed to the caller. Called by the smaller partner to decapsulate.
     /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
-    [ProducesResponseType(400)]
-    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] string recipientId)
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
+    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] string? recipientId = null)
     {
-        if (string.IsNullOrEmpty(recipientId))
-            return BadRequest("recipientId query parameter is required.");
+        var oid = User.GetOid();
+        if (string.IsNullOrEmpty(oid))
+            return Unauthorized();
 
-        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(recipientId);
+        if (!string.IsNullOrEmpty(recipientId) && recipientId != oid)
+            return Forbid();
+
+        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(oid);
 
         _logger.LogInformation(
             "Returning {Count} ciphertext(s) for {Recipient}.",
-            ciphertexts.Count, recipientId);
+            ciphertexts.Count, oid);
 
         return Ok(new CiphertextResponse { Ciphertexts = ciphertexts });
     }

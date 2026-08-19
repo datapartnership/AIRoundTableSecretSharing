@@ -60,8 +60,9 @@ export const getKeyExchangeStatus = (token) => get('/keyexchange/status', token)
 export const postCiphertext = (senderId, recipientId, ciphertextBase64, token) =>
   post('/ciphertext', { senderId, recipientId, ciphertextBase64 }, token)
 
-export const getCiphertexts = (recipientId, token) =>
-  get(`/ciphertext?recipientId=${encodeURIComponent(recipientId)}`, token)
+export const getCiphertexts = (token) => get('/ciphertext', token)
+
+export const getSentCiphertexts = (token) => get('/ciphertext/sent', token)
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 export const getMySubmissions = (token) => get('/metrics/mysubmissions', token)

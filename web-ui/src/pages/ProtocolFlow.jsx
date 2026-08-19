@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useMsal } from '@azure/msal-react'
 import * as api from '../utils/api'
 import { generateMlKemKeyPair, encapsulate, decapsulate, bytesToBase64, base64ToBytes } from '../utils/crypto'
@@ -20,9 +20,66 @@ function epochMonths(epoch) {
 const kpKey = (id) => `mlkem_kp_${id}`
 const ssKey = (id) => `mlkem_ss_${id}`
 const ctKey = (id) => `mlkem_ct_${id}`
+const ctSeenKey = (id) => `mlkem_ctseen_${id}`
 const epKey = (id) => `mlkem_epoch_${id}`
 
 const STEPS = ['Key Generation', 'Encapsulation', 'Decapsulation', 'Submit Data']
+
+function wipeLocalCrypto(id) {
+  localStorage.removeItem(kpKey(id))
+  localStorage.removeItem(ssKey(id))
+  localStorage.removeItem(ctKey(id))
+  localStorage.removeItem(ctSeenKey(id))
+}
+
+function persistSecrets(id, map) {
+  localStorage.setItem(ssKey(id), JSON.stringify(
+    Object.fromEntries([...map].map(([k, v]) => [k, bytesToBase64(v)]))
+  ))
+}
+
+function persistSent(id, sent) {
+  localStorage.setItem(ctKey(id), JSON.stringify([...sent]))
+}
+
+function persistSeen(id, map) {
+  localStorage.setItem(ctSeenKey(id), JSON.stringify(Object.fromEntries(map)))
+}
+
+function loadLocalCrypto(id) {
+  let keyPair = null
+  const secrets = new Map()
+  let sentTo = new Set()
+  const ctSeen = new Map()
+
+  const kp = localStorage.getItem(kpKey(id))
+  if (kp) {
+    try { keyPair = JSON.parse(kp) } catch { keyPair = null }
+  }
+
+  const ss = localStorage.getItem(ssKey(id))
+  if (ss) {
+    try {
+      for (const [k, v] of Object.entries(JSON.parse(ss))) {
+        secrets.set(k, base64ToBytes(v))
+      }
+    } catch { /* ignore corrupt cache */ }
+  }
+
+  const ct = localStorage.getItem(ctKey(id))
+  if (ct) {
+    try { sentTo = new Set(JSON.parse(ct)) } catch { sentTo = new Set() }
+  }
+
+  const seen = localStorage.getItem(ctSeenKey(id))
+  if (seen) {
+    try {
+      for (const [k, v] of Object.entries(JSON.parse(seen))) ctSeen.set(k, v)
+    } catch { /* ignore corrupt cache */ }
+  }
+
+  return { keyPair, secrets, sentTo, ctSeen }
+}
 
 export default function ProtocolFlow() {
   const { instance, accounts } = useMsal()
@@ -31,6 +88,7 @@ export default function ProtocolFlow() {
   const myId = account?.localAccountId ?? ''
 
   const [step, setStep] = useState(1)
+  const [hydrated, setHydrated] = useState(false)
 
   // Key pair state
   const [keyPair, setKeyPair] = useState(null)
@@ -44,6 +102,7 @@ export default function ProtocolFlow() {
   // Ciphertext exchange
   const [sentTo, setSentTo] = useState(new Set())       // partners I encapsulated for
   const [sharedSecrets, setSharedSecrets] = useState(new Map())
+  const [ctSeen, setCtSeen] = useState(new Map())       // senderId → ciphertext blob we already decapped
   const [encapBusy, setEncapBusy] = useState(false)
   const [encapError, setEncapError] = useState(null)
 
@@ -54,51 +113,63 @@ export default function ProtocolFlow() {
   const [busyCells, setBusyCells] = useState(new Set())
   const [cellErrors, setCellErrors] = useState({})
 
-  // ── Restore persisted state — cleared automatically on epoch change ──────────
+  const keyPairRef = useRef(null)
+  const secretsRef = useRef(new Map())
+  const sentToRef = useRef(new Set())
+  const ctSeenRef = useRef(new Map())
+  keyPairRef.current = keyPair
+  secretsRef.current = sharedSecrets
+  sentToRef.current = sentTo
+  ctSeenRef.current = ctSeen
+
+  const applyClearedCrypto = () => {
+    setKeyPair(null)
+    setSharedSecrets(new Map())
+    setSentTo(new Set())
+    setCtSeen(new Map())
+    setStep(1)
+    setEncapError(null)
+    setKeyError(null)
+  }
+
+  const applyLocalCrypto = (id) => {
+    const local = loadLocalCrypto(id)
+    setKeyPair(local.keyPair)
+    setSharedSecrets(local.secrets)
+    setSentTo(local.sentTo)
+    setCtSeen(local.ctSeen)
+  }
+
+  // ── Restore persisted state before any auto-run (epoch change wipes cache) ──
   useEffect(() => {
     if (!myId) return
+    let cancelled = false
+    setHydrated(false)
 
-    // Load current epoch and wipe stale state if it changed
-    api.acquireApiToken(instance, account).then(token => api.getEpoch(token)).then(ep => {
-      setEpoch(ep)
-      const storedEpochId = localStorage.getItem(epKey(myId))
-      if (storedEpochId !== String(ep.epochId)) {
-        localStorage.removeItem(kpKey(myId))
-        localStorage.removeItem(ssKey(myId))
-        localStorage.removeItem(ctKey(myId))
-        localStorage.setItem(epKey(myId), String(ep.epochId))
-        setKeyPair(null)
-        setSharedSecrets(new Map())
-        setSentTo(new Set())
-        setStep(1)
-        return
+    ;(async () => {
+      try {
+        const token = await api.acquireApiToken(instance, account)
+        const ep = await api.getEpoch(token)
+        if (cancelled) return
+        setEpoch(ep)
+        const storedEpochId = localStorage.getItem(epKey(myId))
+        if (storedEpochId !== String(ep.epochId)) {
+          wipeLocalCrypto(myId)
+          localStorage.setItem(epKey(myId), String(ep.epochId))
+          applyClearedCrypto()
+        } else {
+          applyLocalCrypto(myId)
+        }
+      } catch {
+        if (cancelled) return
+        applyLocalCrypto(myId)
+      } finally {
+        if (!cancelled) setHydrated(true)
       }
-      const kp = localStorage.getItem(kpKey(myId))
-      if (kp) setKeyPair(JSON.parse(kp))
+    })()
 
-      const ss = localStorage.getItem(ssKey(myId))
-      if (ss) {
-        const parsed = JSON.parse(ss)
-        setSharedSecrets(new Map(Object.entries(parsed).map(([k, v]) => [k, base64ToBytes(v)])))
-      }
-
-      const ct = localStorage.getItem(ctKey(myId))
-      if (ct) setSentTo(new Set(JSON.parse(ct)))
-    }).catch(() => {
-      // Epoch not yet created — still restore any local state
-      const kp = localStorage.getItem(kpKey(myId))
-      if (kp) setKeyPair(JSON.parse(kp))
-
-      const ss = localStorage.getItem(ssKey(myId))
-      if (ss) {
-        const parsed = JSON.parse(ss)
-        setSharedSecrets(new Map(Object.entries(parsed).map(([k, v]) => [k, base64ToBytes(v)])))
-      }
-
-      const ct = localStorage.getItem(ctKey(myId))
-      if (ct) setSentTo(new Set(JSON.parse(ct)))
-    })
-  }, [myId])
+    return () => { cancelled = true }
+  }, [myId, instance, account])
 
   // ── Self-register as producer on first visit ─────────────────────────────────
   useEffect(() => {
@@ -108,38 +179,52 @@ export default function ProtocolFlow() {
       .catch(() => {}) // non-fatal — partner can still proceed
   }, [myId])
 
-  // ── Poll status & partner keys on steps 1–3 ─────────────────────────────────
+  // ── Poll status & partner keys on steps 1–3 (after local restore) ───────────
   useEffect(() => {
-    if (step > 3 || !myId) return
+    if (!hydrated || step > 3 || !myId) return
     let alive = true
 
     const poll = async () => {
       try {
         const token = await api.acquireApiToken(instance, account)
-        const [s, pk, ep] = await Promise.all([
+        const [s, pk, ep, sent] = await Promise.all([
           api.getKeyExchangeStatus(token),
           api.getPartnerKeys(myId, token),
           api.getEpoch(token),
+          api.getSentCiphertexts(token).catch(() => ({ ciphertexts: [] })),
         ])
         if (!alive) return
 
-        // Detect epoch change and wipe stale state immediately
         const storedEpochId = localStorage.getItem(epKey(myId))
         if (storedEpochId !== String(ep.epochId)) {
-          localStorage.removeItem(kpKey(myId))
-          localStorage.removeItem(ssKey(myId))
-          localStorage.removeItem(ctKey(myId))
+          wipeLocalCrypto(myId)
           localStorage.setItem(epKey(myId), String(ep.epochId))
           setEpoch(ep)
-          setKeyPair(null)
-          setSharedSecrets(new Map())
-          setSentTo(new Set())
-          setStep(1)
+          applyClearedCrypto()
           return
         }
 
+        setEpoch(ep)
         setStatus(s)
         setPartnerKeys(pk.partnerKeys ?? [])
+
+        const serverSent = (sent.ciphertexts ?? []).map((c) => c.recipientId)
+        if (serverSent.length) {
+          setSentTo((prev) => {
+            const next = new Set(prev)
+            for (const id of serverSent) next.add(id)
+            persistSent(myId, next)
+            return next
+          })
+        }
+
+        const serverKey = s.myPublicKeyBase64
+        const localKp = keyPairRef.current
+        if (serverKey && localKp && serverKey !== localKp.ekBase64) {
+          setKeyError('This browser’s key does not match the key registered on the server. Recreate the epoch, then reset local state.')
+        } else if (serverKey && !localKp) {
+          setKeyError('The server has a public key for you, but this browser has no matching private key. Recreate the epoch, then generate a new key.')
+        }
       } catch {
         // silent poll failure
       }
@@ -148,18 +233,14 @@ export default function ProtocolFlow() {
     poll()
     const id = setInterval(poll, 5000)
     return () => { alive = false; clearInterval(id) }
-  }, [step, myId, instance, account?.homeAccountId])
+  }, [hydrated, step, myId, instance, account?.homeAccountId])
 
   // ── Manual state reset (escape hatch for stuck states) ─────────────────────
   const resetLocalState = () => {
-    localStorage.removeItem(kpKey(myId))
-    localStorage.removeItem(ssKey(myId))
-    localStorage.removeItem(ctKey(myId))
+    wipeLocalCrypto(myId)
     localStorage.removeItem(epKey(myId))
-    setKeyPair(null)
-    setSharedSecrets(new Map())
-    setSentTo(new Set())
-    setStep(1)
+    applyClearedCrypto()
+    setHydrated(true)
   }
 
   // ── Step 1: generate & register key pair ─────────────────────────────────────
@@ -168,45 +249,49 @@ export default function ProtocolFlow() {
     setKeyError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
-      let kp = keyPair
-      if (!kp) {
-        kp = await generateMlKemKeyPair()
+      const existing = keyPairRef.current
+      const kp = existing ?? await generateMlKemKeyPair()
+      await api.registerPublicKey(myId, kp.ekBase64, token)
+      if (!existing) {
         localStorage.setItem(kpKey(myId), JSON.stringify(kp))
         setKeyPair(kp)
       }
-      await api.registerPublicKey(myId, kp.ekBase64, token)
     } catch (e) {
       setKeyError(e.message)
     } finally {
       setKeyBusy(false)
     }
-  }, [instance, account, myId, keyPair])
+  }, [instance, account, myId])
 
-  // ── Step 2: encapsulate for all smaller-ID partners ─────────────────────────
+  // ── Step 2: encapsulate for all smaller-ID partners (never overwrite) ───────
   const performEncapsulation = useCallback(async () => {
     setEncapBusy(true)
     setEncapError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
-      const allKeys = partnerKeys
-      const targets = allKeys.filter((pk) => pk.producerId < myId)
-
-      const newSecrets = new Map(sharedSecrets)
-      const newSent = new Set(sentTo)
+      const targets = partnerKeys.filter((pk) => pk.producerId < myId)
+      const newSecrets = new Map(secretsRef.current)
+      const newSent = new Set(sentToRef.current)
 
       for (const pk of targets) {
-        if (newSent.has(pk.producerId)) continue
+        if (newSecrets.has(pk.producerId) && newSent.has(pk.producerId)) continue
+
+        if (newSent.has(pk.producerId) && !newSecrets.has(pk.producerId)) {
+          throw new Error(
+            `A ciphertext for ${pk.producerId} is already on the server, but this browser lost the shared secret. Recreate the epoch so both sides start over.`
+          )
+        }
+
         const { ctBase64, sharedSecret } = await encapsulate(pk.publicKeyBase64)
         await api.postCiphertext(myId, pk.producerId, ctBase64, token)
         newSecrets.set(pk.producerId, sharedSecret)
         newSent.add(pk.producerId)
-        // Persist after each successful send
-        localStorage.setItem(ssKey(myId), JSON.stringify(
-          Object.fromEntries([...newSecrets].map(([k, v]) => [k, bytesToBase64(v)]))
-        ))
-        localStorage.setItem(ctKey(myId), JSON.stringify([...newSent]))
+        persistSecrets(myId, newSecrets)
+        persistSent(myId, newSent)
       }
 
+      secretsRef.current = newSecrets
+      sentToRef.current = newSent
       setSharedSecrets(newSecrets)
       setSentTo(newSent)
     } catch (e) {
@@ -214,34 +299,39 @@ export default function ProtocolFlow() {
     } finally {
       setEncapBusy(false)
     }
-  }, [instance, account, myId, partnerKeys, sharedSecrets, sentTo])
+  }, [instance, account, myId, partnerKeys])
 
-  // ── Step 3: decapsulate all received ciphertexts ────────────────────────────
+  // ── Step 3: decapsulate received ciphertexts (re-run if blob changed) ───────
   const performDecapsulation = useCallback(async () => {
-    if (!keyPair) return
+    const kp = keyPairRef.current
+    if (!kp) return
     setEncapBusy(true)
     setEncapError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
-      const { ciphertexts } = await api.getCiphertexts(myId, token)
-      const newSecrets = new Map(sharedSecrets)
+      const { ciphertexts } = await api.getCiphertexts(token)
+      const newSecrets = new Map(secretsRef.current)
+      const seen = new Map(ctSeenRef.current)
 
       for (const ct of ciphertexts ?? []) {
-        if (newSecrets.has(ct.senderId)) continue
-        const ss = await decapsulate(ct.ciphertextBase64, keyPair.dkBase64)
+        if (seen.get(ct.senderId) === ct.ciphertextBase64 && newSecrets.has(ct.senderId)) continue
+        const ss = await decapsulate(ct.ciphertextBase64, kp.dkBase64)
         newSecrets.set(ct.senderId, ss)
+        seen.set(ct.senderId, ct.ciphertextBase64)
       }
 
-      localStorage.setItem(ssKey(myId), JSON.stringify(
-        Object.fromEntries([...newSecrets].map(([k, v]) => [k, bytesToBase64(v)]))
-      ))
+      persistSecrets(myId, newSecrets)
+      persistSeen(myId, seen)
+      secretsRef.current = newSecrets
+      ctSeenRef.current = seen
       setSharedSecrets(newSecrets)
+      setCtSeen(seen)
     } catch (e) {
       setEncapError(e.message)
     } finally {
       setEncapBusy(false)
     }
-  }, [instance, account, myId, keyPair, sharedSecrets])
+  }, [instance, account, myId])
 
   // ── Step 4: load epoch + existing submissions ────────────────────────────────
   useEffect(() => {
@@ -298,53 +388,66 @@ export default function ProtocolFlow() {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+  const epochPartnerIds = epoch?.producerIds ?? []
+  const expectedSmallerIds = epochPartnerIds.filter((id) => id < myId)
+  const expectedLargerIds = epochPartnerIds.filter((id) => id > myId)
   const smallerIdPartners = partnerKeys.filter((pk) => pk.producerId < myId)
   const largerIdPartners = partnerKeys.filter((pk) => pk.producerId > myId)
-  const allEncapsDone = smallerIdPartners.every((pk) => sentTo.has(pk.producerId))
-  const allDecapsDone = largerIdPartners.every((pk) => sharedSecrets.has(pk.producerId))
+  const epochKeysReady = (status?.isComplete === true)
+    && epochPartnerIds.length >= 2
+    && (status?.expectedCount ?? 0) >= 2
+    && partnerKeys.length >= epochPartnerIds.filter((id) => id !== myId).length
+  const allEncapsDone = expectedSmallerIds.length === 0
+    || expectedSmallerIds.every((id) => sentTo.has(id) && sharedSecrets.has(id))
+  const allDecapsDone = expectedLargerIds.length === 0
+    || expectedLargerIds.every((id) => sharedSecrets.has(id))
   const exchangeComplete = status?.isCiphertextExchangeComplete ?? false
+  const keysMatch = !status?.myPublicKeyBase64
+    || (keyPair && status.myPublicKeyBase64 === keyPair.ekBase64)
 
   // ── Auto-progression ─────────────────────────────────────────────────────────
 
-  // Step 1: auto-generate key when epoch is loaded and no key pair exists
+  // Step 1: auto-generate only after restore, and only if the server has no key yet
   useEffect(() => {
-    if (step !== 1 || keyPair || keyBusy || !epoch || !myId) return
+    if (!hydrated || step !== 1 || keyPair || keyBusy || !epoch || !myId) return
+    if (status?.myPublicKeyBase64) return
     generateAndRegister()
-  }, [step, !!keyPair, keyBusy, !!epoch, myId])
+  }, [hydrated, step, !!keyPair, keyBusy, !!epoch, myId, status?.myPublicKeyBase64])
 
-  // Step 1 → 2: advance once all partners have registered keys
+  // Step 1 → 2: advance once all epoch partners registered AND we hold the matching private key
   useEffect(() => {
-    if (step !== 1 || !status?.isComplete || !status?.registeredPartners?.includes(myId)) return
+    if (!hydrated || step !== 1 || !keyPair || !keysMatch) return
+    if (!status?.isComplete || !status?.registeredPartners?.includes(myId)) return
     setStep(2)
-  }, [step, status?.isComplete, status?.registeredCount])
+  }, [hydrated, step, !!keyPair, keysMatch, status?.isComplete, status?.registeredCount])
 
-  // Step 2: auto-encapsulate as soon as partner keys are available
+  // Step 2: auto-encapsulate once the full epoch key set is present
   useEffect(() => {
-    if (step !== 2 || encapBusy || !partnerKeys.length) return
-    if (smallerIdPartners.length === 0 || allEncapsDone) return
+    if (!hydrated || step !== 2 || encapBusy || encapError || !epochKeysReady) return
+    if (expectedSmallerIds.length === 0 || allEncapsDone) return
     performEncapsulation()
-  }, [step, partnerKeys.length, encapBusy])
+  }, [hydrated, step, epochKeysReady, encapBusy, encapError, allEncapsDone])
 
-  // Step 2 → 3: advance when all encapsulations done (or nothing to send)
+  // Step 2 → 3: wait for every smaller epoch partner, not a partial poll snapshot
   useEffect(() => {
-    if (step !== 2) return
-    if (partnerKeys.length === 0) return // wait for keys to load
-    if (smallerIdPartners.length === 0 || allEncapsDone) setStep(3)
-  }, [step, allEncapsDone, partnerKeys.length])
+    if (!hydrated || step !== 2 || !epochKeysReady) return
+    if (expectedSmallerIds.length === 0 || allEncapsDone) setStep(3)
+  }, [hydrated, step, epochKeysReady, allEncapsDone, expectedSmallerIds.length])
 
   // Step 3: auto-decapsulate whenever new ciphertexts arrive
   useEffect(() => {
-    if (step !== 3 || encapBusy || !keyPair || allDecapsDone) return
-    if (largerIdPartners.length === 0) return
+    if (!hydrated || step !== 3 || encapBusy || encapError || !keyPair || allDecapsDone) return
+    if (expectedLargerIds.length === 0) return
     performDecapsulation()
-  }, [step, status?.actualCiphertexts, !!keyPair])
+  }, [hydrated, step, status?.actualCiphertexts, !!keyPair, encapError, allDecapsDone])
 
   // Step 3 → 4: advance when ciphertext exchange is complete and all secrets derived
   useEffect(() => {
-    if (step !== 3) return
-    if (largerIdPartners.length === 0 && exchangeComplete) { setStep(4); return }
+    if (!hydrated || step !== 3) return
+    if (epochPartnerIds.length < 2) return
+    if (expectedLargerIds.length === 0 && exchangeComplete) { setStep(4); return }
     if (exchangeComplete && allDecapsDone) setStep(4)
-  }, [step, exchangeComplete, allDecapsDone])
+  }, [hydrated, step, exchangeComplete, allDecapsDone, expectedLargerIds.length, epochPartnerIds.length])
 
   // ── Render helpers ────────────────────────────────────────────────────────────
   const dot = (ok) => (
@@ -438,7 +541,9 @@ export default function ProtocolFlow() {
 
       {smallerIdPartners.length === 0 ? (
         <div className="info-box" style={{ background: 'rgba(74,222,128,0.1)', borderColor: 'rgba(74,222,128,0.3)', color: '#86efac' }}>
-          ✨ You have the smallest producer ID — nothing to send. Advancing to Step 3…
+          {epochKeysReady
+            ? '✨ You have the smallest producer ID — nothing to send. Advancing to Step 3…'
+            : '⏳ Waiting for every epoch partner to register a public key…'}
         </div>
       ) : (
         smallerIdPartners.map((pk) => (

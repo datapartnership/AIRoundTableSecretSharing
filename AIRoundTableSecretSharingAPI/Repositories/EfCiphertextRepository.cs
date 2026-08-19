@@ -28,9 +28,17 @@ public class EfCiphertextRepository : ICiphertextRepository
         await _db.SaveChangesAsync();
     }
 
+    public Task<PartnerCiphertext?> GetAsync(string senderId, string recipientId) =>
+        _db.Ciphertexts.FirstOrDefaultAsync(c => c.SenderId == senderId && c.RecipientId == recipientId);
+
     public Task<List<PartnerCiphertext>> GetForRecipientAsync(string recipientId) =>
         _db.Ciphertexts
             .Where(c => c.RecipientId == recipientId)
+            .ToListAsync();
+
+    public Task<List<PartnerCiphertext>> GetForSenderAsync(string senderId) =>
+        _db.Ciphertexts
+            .Where(c => c.SenderId == senderId)
             .ToListAsync();
 
     public Task<int> CountForPartnersAsync(List<string> partnerIds) =>

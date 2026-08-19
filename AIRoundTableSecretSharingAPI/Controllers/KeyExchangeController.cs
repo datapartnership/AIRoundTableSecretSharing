@@ -44,6 +44,7 @@ public class KeyExchangeController : ControllerBase
     [HttpPost("register")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
     public async Task<ActionResult<MessageResponse>> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
         // Identity comes from the token; body field is ignored
@@ -64,6 +65,15 @@ public class KeyExchangeController : ControllerBase
         catch (FormatException)
         {
             return BadRequest("Invalid Base64 encoding for public key");
+        }
+
+        var existing = await _keyRepo.GetKeyAsync(request.ProducerId);
+        if (existing != null && existing.PublicKeyBase64 != request.PublicKeyBase64)
+        {
+            return Conflict(new
+            {
+                error = "A different public key is already registered for this partner. Recreate the epoch to start a new key exchange."
+            });
         }
 
         var partnerKey = new PartnerPublicKey
@@ -93,21 +103,23 @@ public class KeyExchangeController : ControllerBase
     public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
     {
         var allKeys = await _keyRepo.GetAllKeysAsync();
+        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
+        var epochIds = epoch?.ProducerIds.ToHashSet() ?? [];
 
-        // Optionally exclude the requesting partner's own key
-        var keys = excludeProducerId != null
-            ? allKeys.Where(k => k.ProducerId != excludeProducerId).ToList()
-            : allKeys;
+        var keys = allKeys.Where(k => epochIds.Contains(k.ProducerId));
+        if (excludeProducerId != null)
+            keys = keys.Where(k => k.ProducerId != excludeProducerId);
 
+        var partnerKeys = keys.ToList();
         _logger.LogInformation(
             "Returning {Count} public keys (excluding: {Excluded})",
-            keys.Count,
+            partnerKeys.Count,
             excludeProducerId ?? "none");
 
         return Ok(new KeyExchangeResponse
         {
-            PartnerKeys = keys,
-            TotalPartners = allKeys.Count
+            PartnerKeys = partnerKeys,
+            TotalPartners = epochIds.Count
         });
     }
 
@@ -139,9 +151,14 @@ public class KeyExchangeController : ControllerBase
     {
         var registeredKeys = await _keyRepo.GetAllKeysAsync();
         var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
+        var callerId = User.GetOid();
+        var myKey = callerId != null
+            ? registeredKeys.FirstOrDefault(k => k.ProducerId == callerId)
+            : null;
 
         var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
         var expectedPartners = epoch?.ProducerIds ?? [];
+        var epochRegistered = expectedPartners.Where(p => registeredIds.Contains(p)).ToList();
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
 
         var n = expectedPartners.Count;
@@ -159,15 +176,17 @@ public class KeyExchangeController : ControllerBase
 
         return Ok(new KeyExchangeStatusResponse
         {
-            IsComplete = !missingKeys.Any(),
-            RegisteredCount = registeredIds.Count,
+            IsComplete = expectedPartners.Count >= 2 && missingKeys.Count == 0,
+            RegisteredCount = epochRegistered.Count,
             ExpectedCount = expectedPartners.Count,
-            RegisteredPartners = registeredIds.ToList(),
+            RegisteredPartners = epochRegistered,
             MissingPartners = missingKeys,
             ActualCiphertexts = actualCiphertexts,
             ExpectedCiphertexts = expectedCiphertexts,
-            IsCiphertextExchangeComplete = actualCiphertexts >= expectedCiphertexts,
-            MissingCiphertextSenders = missingSenders
+            IsCiphertextExchangeComplete = expectedPartners.Count >= 2
+                && actualCiphertexts >= expectedCiphertexts,
+            MissingCiphertextSenders = missingSenders,
+            MyPublicKeyBase64 = myKey?.PublicKeyBase64
         });
     }
 }

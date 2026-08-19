@@ -50,6 +50,8 @@ public class KeyExchangeStatusResponse
     public int ExpectedCiphertexts { get; set; }
     public bool IsCiphertextExchangeComplete { get; set; }
     public List<string> MissingCiphertextSenders { get; set; } = new();
+    /// <summary>Caller's currently registered encapsulation key, if any.</summary>
+    public string? MyPublicKeyBase64 { get; set; }
 }
 
 public class SubmittedEntry
