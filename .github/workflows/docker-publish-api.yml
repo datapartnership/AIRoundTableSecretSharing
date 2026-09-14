@@ -1,0 +1,78 @@
+name: Build and Push API Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+    paths:
+      - "AIRoundTableSecretSharingAPI/**"
+      - "AIRoundTableSecretSharingCommon/**"
+      - "AIRoundTableSecretSharingCommon.sln"      
+      - ".github/workflows/docker-publish-api.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "AIRoundTableSecretSharingAPI/**"
+      - "AIRoundTableSecretSharingCommon/**"
+      - "AIRoundTableSecretSharingCommon.sln"      
+      - ".github/workflows/docker-publish-api.yml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional extra tag to apply to the built image (e.g. hotfix-123)"
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/airoundtablesecretsharingapi
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '' }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./AIRoundTableSecretSharingAPI/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
