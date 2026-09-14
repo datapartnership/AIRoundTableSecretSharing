@@ -32,6 +32,8 @@ bld/
 # NuGet Packages
 *.nupkg
 *.snupkg
+nuget.config.local
+nuget.local.config
 **/[Pp]ackages/*
 !**/[Pp]ackages/build/
 !**/[Pp]ackages/repositories.config

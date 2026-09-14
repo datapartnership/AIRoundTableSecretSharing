@@ -7,7 +7,7 @@ WORKDIR /src
 
 COPY ["AIRoundTableSecretSharingAPI/AIRoundTableSecretSharingAPI.csproj", "AIRoundTableSecretSharingAPI/"]
 COPY ["AIRoundTableSecretSharingCommon/AIRoundTableSecretSharingCommon.csproj", "AIRoundTableSecretSharingCommon/"]
-COPY ["nuget.config", "."]
+COPY ["nuget.docker.config", "nuget.config"]
 
 COPY AIRoundTableSecretSharingAPI/ AIRoundTableSecretSharingAPI/
 COPY AIRoundTableSecretSharingCommon/ AIRoundTableSecretSharingCommon/
