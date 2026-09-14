@@ -14,6 +14,8 @@ public static class DeterministicNoiseGenerator
         string producerId2,
         string country,
         DateTime month,
+        string indicator,
+        string segment,
         long maxNoise = 100_000_000)
     {
         if (string.IsNullOrEmpty(producerId1) || string.IsNullOrEmpty(producerId2))
@@ -25,7 +27,7 @@ public static class DeterministicNoiseGenerator
         // Create deterministic seed from inputs
         // Order doesn't matter - hash will be same either way for the pair
         var sortedIds = new[] { producerId1, producerId2 }.OrderBy(x => x).ToArray();
-        var seedString = $"{sortedIds[0]}|{sortedIds[1]}|{country}|{month:yyyy-MM}";
+        var seedString = $"{sortedIds[0]}|{sortedIds[1]}|{country}|{month:yyyy-MM}|{indicator}|{segment}";
         
         // Hash to create deterministic seed
         using var sha256 = SHA256.Create();

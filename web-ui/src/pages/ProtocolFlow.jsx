@@ -3,19 +3,7 @@ import { useMsal } from '@azure/msal-react'
 import * as api from '../utils/api'
 import { generateMlKemKeyPair, encapsulate, decapsulate, bytesToBase64, base64ToBytes } from '../utils/crypto'
 import { calculateMaskedValue } from '../utils/noise'
-
-const COUNTRIES = ['US', 'GB', 'DE']
-const MONTHS = ['2026-06', '2026-07', '2026-08'] // fallback only
-
-// Derive 3 submission months from epoch start date
-function epochMonths(epoch) {
-  if (!epoch?.startDate) return MONTHS
-  return Array.from({ length: 3 }, (_, i) => {
-    const d = new Date(epoch.startDate)
-    d.setUTCMonth(d.getUTCMonth() + i)
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
-  })
-}
+import { parseAndValidateCsv, isCsvFile, epochMonths, CELL_COUNT, ERROR_DISPLAY_CAP, formatInt } from '../utils/csvUpload'
 
 const kpKey = (id) => `mlkem_kp_${id}`
 const ssKey = (id) => `mlkem_ss_${id}`
@@ -122,12 +110,14 @@ export default function ProtocolFlow() {
   const [encapBusy, setEncapBusy] = useState(false)
   const [encapError, setEncapError] = useState(null)
 
-  // Data grid
+  // CSV upload
   const [epoch, setEpoch] = useState(null)
   const [submittedCells, setSubmittedCells] = useState(new Set())
-  const [values, setValues] = useState({})
-  const [busyCells, setBusyCells] = useState(new Set())
-  const [cellErrors, setCellErrors] = useState({})
+  const [csvFileName, setCsvFileName] = useState('')
+  const [csvResult, setCsvResult] = useState(null)
+  const [submitBusy, setSubmitBusy] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   const keyPairRef = useRef(null)
   const secretsRef = useRef(new Map())
@@ -430,59 +420,76 @@ export default function ProtocolFlow() {
       try {
         const token = await api.acquireApiToken(instance, account)
         const my = await api.getMySubmissions(token)
-        const done = new Set((my.submissions ?? []).map((s) => `${s.country}|${s.month}`))
-        log('loaded submissions', { cells: [...done] })
+        const done = new Set((my.submissions ?? []).map((s) => `${s.country}|${s.month}|${s.indicator}|${s.segment}`))
+        log('loaded submissions', { cells: done.size })
         setSubmittedCells(done)
       } catch (e) {
         fail('load submissions failed', e)
-        setCellErrors({ _load: e.message })
+        setLoadError(e.message)
       }
     })()
   }, [step, myId, instance, account?.homeAccountId])
 
-  // ── Submit a single cell ─────────────────────────────────────────────────────
-  const submitCell = async (country, month) => {
-    const cellId = `${country}|${month}`
-    const raw = parseFloat(values[cellId])
-    if (isNaN(raw) || raw < 0) {
-      setCellErrors((p) => ({ ...p, [cellId]: 'Enter a non-negative number' }))
+  // ── Submit CSV ────────────────────────────────────────────────────────────────
+  const onCsvPicked = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    setSubmitError(null)
+    setCsvResult(null)
+    setCsvFileName('')
+    if (!file) return
+    if (!isCsvFile(file)) {
+      setCsvResult({ ok: false, errors: ['File must be a .csv'], rows: [], monthMap: {}, preview: [] })
+      setCsvFileName(file.name)
       return
     }
-    setBusyCells((p) => new Set(p).add(cellId))
-    setCellErrors((p) => { const n = { ...p }; delete n[cellId]; return n })
+    setCsvFileName(file.name)
     try {
-      const token = await api.acquireApiToken(instance, account)
-      const masked = await calculateMaskedValue(raw, country, month, myId, sharedSecrets)
-      log('submit cell', { cellId, raw, masked: Math.round(masked), epochId: epoch.epochId })
-      await api.submitMetric(
-        { country, month, value: Math.round(masked), epochId: epoch.epochId, signature: 'web-ui' },
-        token
-      )
-      log('submit cell ok', { cellId })
-      setSubmittedCells((p) => new Set(p).add(cellId))
-      const ep = await api.getEpoch(token)
-      setEpoch(ep)
-      if (ep.isClosed) log('epoch closed after submit', { epochId: ep.epochId })
+      const text = await file.text()
+      const months = epochMonths(epoch)
+      const result = parseAndValidateCsv(text, months)
+      log('csv parsed', { ok: result.ok, rows: result.rows.length, errors: result.errors.length, monthMap: result.monthMap })
+      setCsvResult(result)
     } catch (e) {
-      if (e.status === 409) {
-        warn('submit cell already exists', { cellId })
-        setSubmittedCells((p) => new Set(p).add(cellId))
-      } else {
-        fail('submit cell failed', e, { cellId })
-        setCellErrors((p) => ({ ...p, [cellId]: e.message }))
-      }
-    } finally {
-      setBusyCells((p) => { const n = new Set(p); n.delete(cellId); return n })
+      fail('csv parse failed', e)
+      setCsvResult({ ok: false, errors: [e.message || 'Failed to read CSV'], rows: [], monthMap: {}, preview: [] })
     }
   }
 
-  const submitAll = () => {
-    const months = epochMonths(epoch)
-    for (const country of COUNTRIES) {
-      for (const month of months) {
-        const id = `${country}|${month}`
-        if (!submittedCells.has(id)) submitCell(country, month)
+  const submitCsv = async () => {
+    if (!csvResult?.ok || submitBusy) return
+    setSubmitBusy(true)
+    setSubmitError(null)
+    try {
+      const token = await api.acquireApiToken(instance, account)
+      const payload = []
+      for (const row of csvResult.rows) {
+        const masked = await calculateMaskedValue(
+          row.value, row.country, row.month, row.indicator, row.segment, myId, sharedSecrets
+        )
+        payload.push({
+          country: row.country,
+          month: row.month,
+          indicator: row.indicator,
+          segment: row.segment,
+          value: masked.toString(),
+          epochId: epoch.epochId,
+          signature: 'web-ui',
+        })
       }
+      log('submit batch', { rows: payload.length, epochId: epoch.epochId })
+      await api.submitMetricsBatch(payload, token)
+      const done = new Set(payload.map((s) => `${s.country}|${s.month}|${s.indicator}|${s.segment}`))
+      setSubmittedCells((p) => new Set([...p, ...done]))
+      const ep = await api.getEpoch(token)
+      setEpoch(ep)
+      if (ep.isClosed) log('epoch closed after submit', { epochId: ep.epochId })
+      log('submit batch ok', { cells: done.size })
+    } catch (e) {
+      fail('submit batch failed', e)
+      setSubmitError(e.message)
+    } finally {
+      setSubmitBusy(false)
     }
   }
 
@@ -626,81 +633,123 @@ export default function ProtocolFlow() {
   )
 
   const renderSubmit = () => {
-    const months = epochMonths(epoch)
-    const allDone = COUNTRIES.every((c) => months.every((m) => submittedCells.has(`${c}|${m}`)))
+    const months = epochMonths(epoch) ?? []
+    const allDone = submittedCells.size >= CELL_COUNT
+    const errors = csvResult?.errors ?? []
+    const shownErrors = errors.slice(0, ERROR_DISPLAY_CAP)
+    const monthEntries = Object.entries(csvResult?.monthMap ?? {})
     return (
       <div className="card animate-fade-in">
         <div className="card-header">
           <span className="card-icon">📊</span>
           <h2 className="card-title">Submit Data</h2>
-          <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.875rem' }}>
-            {months[0]} – {months[2]}
-          </span>
+          {months.length > 0 && (
+            <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.875rem' }}>
+              {months[0]} – {months[months.length - 1]}
+            </span>
+          )}
         </div>
 
         <div className="info-box">
-          Enter your actual MAU values. The noise derived from your shared secrets is applied automatically
-          before submission — the aggregator only sees masked values.
+          Upload a CSV of unmasked values. Noise from your shared secrets is applied in the browser before
+          submission — the aggregator only sees masked values. Values must be positive integers (no zeros or negatives).
         </div>
 
-        {cellErrors._load && (
+        {loadError && (
           <div className="info-box error">
-            ⚠️ {cellErrors._load}
+            ⚠️ {loadError}
           </div>
         )}
 
-        <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
-          <table className="results-table">
-            <thead>
-              <tr>
-                <th>Country</th>
-                {months.map((m) => <th key={m}>{m}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {COUNTRIES.map((country) => (
-                <tr key={country}>
-                  <td className="text-strong" style={{ fontWeight: 600 }}>{country}</td>
-                  {months.map((month) => {
-                    const id = `${country}|${month}`
-                    const done = submittedCells.has(id)
-                    const busy = busyCells.has(id)
-                    const err = cellErrors[id]
-                    return (
-                      <td key={month}>
-                        {done ? (
-                          <span className="status-badge success">✓ Submitted</span>
-                        ) : (
-                          <input
-                            type="number"
-                            className="form-input"
-                            style={{ width: 110, padding: '0.4rem 0.6rem' }}
-                            placeholder="MAU"
-                            min="0"
-                            value={values[id] ?? ''}
-                            onChange={(e) => setValues((p) => ({ ...p, [id]: e.target.value }))}
-                            disabled={busy}
-                          />
-                        )}
-                        {busy && <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: 4 }}>submitting…</div>}
-                        {err && <div className="text-danger" style={{ fontSize: '0.75rem', marginTop: 4 }}>{err}</div>}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
         {allDone ? (
           <div className="info-box ok">
-            ✅ All {COUNTRIES.length * months.length} cells submitted. Waiting for the remaining producers…
+            ✅ All {CELL_COUNT} cells submitted. Waiting for the remaining producers…
           </div>
         ) : (
-          <button className="btn btn-primary" onClick={submitAll}>
-            ⚡ Submit All
-          </button>
+          <>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <a className="btn btn-secondary" href="/sample.csv" download="sample.csv" style={{ fontSize: '0.85rem' }}>
+                Download sample.csv
+              </a>
+              <label className="btn btn-secondary" style={{ fontSize: '0.85rem', marginBottom: 0, cursor: 'pointer' }}>
+                Choose CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={onCsvPicked}
+                  disabled={submitBusy}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              {csvFileName && <span className="text-muted" style={{ fontSize: '0.85rem' }}>{csvFileName}</span>}
+            </div>
+
+            {errors.length > 0 && (
+              <div className="info-box error" style={{ maxHeight: 240, overflowY: 'auto' }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>CSV validation failed</div>
+                <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                  {shownErrors.map((err, i) => <li key={i}>{err}</li>)}
+                </ul>
+                {errors.length > ERROR_DISPLAY_CAP && (
+                  <div style={{ marginTop: 6 }}>and {errors.length - ERROR_DISPLAY_CAP} more</div>
+                )}
+              </div>
+            )}
+
+            {csvResult?.ok && (
+              <>
+                <div className="info-box ok">
+                  Valid file: {CELL_COUNT} cells. Months remapped
+                  {monthEntries.length > 0 && (
+                    <>: {monthEntries.map(([from, to]) => `${from} → ${to}`).join(', ')}</>
+                  )}
+                </div>
+                <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>Country</th>
+                        <th>CSV month</th>
+                        <th>Epoch month</th>
+                        <th>Indicator</th>
+                        <th>Segment</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(csvResult.preview ?? []).map((r, i) => (
+                        <tr key={i}>
+                          <td>{r.country}</td>
+                          <td>{r.csvMonth}</td>
+                          <td>{r.month}</td>
+                          <td>{r.indicator}</td>
+                          <td>{r.segment}</td>
+                          <td>{formatInt(r.value)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="text-muted" style={{ fontSize: '0.8rem', marginBottom: '1rem' }}>
+                  Showing first {csvResult.preview.length} of {CELL_COUNT} rows
+                </div>
+              </>
+            )}
+
+            {submitError && (
+              <div className="info-box error">
+                ⚠️ {submitError}
+              </div>
+            )}
+
+            <button
+              className="btn btn-primary"
+              onClick={submitCsv}
+              disabled={!csvResult?.ok || submitBusy}
+            >
+              {submitBusy ? 'Submitting…' : 'Submit CSV'}
+            </button>
+          </>
         )}
       </div>
     )

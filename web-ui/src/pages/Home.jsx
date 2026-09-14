@@ -46,7 +46,7 @@ export default function Home() {
           <div className="feature-icon">✨</div>
           <h3 className="feature-title">Perfect Noise Cancellation</h3>
           <p className="feature-description">
-            Noise is derived via HMAC-SHA256 on the shared secret and (country, month).
+            Noise is derived via HMAC-SHA256 on the shared secret and (country, month, indicator, segment).
             One partner adds it; the other subtracts it — they cancel exactly in the sum.
           </p>
         </div>
@@ -69,7 +69,7 @@ export default function Home() {
           ['Generate ML-KEM-768 key pair', 'Your public key (1184 bytes) is registered with the API. The private key (2400 bytes) stays in your browser.'],
           ['Encapsulate for smaller-ID partners', 'For each partner whose ID is lexicographically smaller than yours, encapsulate their public key → a ciphertext (1088 bytes) + shared secret. Post the ciphertext to the API.'],
           ['Decapsulate received ciphertexts', 'Partners with larger IDs send you ciphertexts. Decapsulate each one with your private key to derive the same shared secret.'],
-          ['Submit masked metrics', 'For each (country, month) cell, apply deterministic noise from shared secrets (HMAC-SHA256) before submitting. Noise cancels in the aggregate.'],
+          ['Submit masked metrics', 'Upload a CSV of (country, month, indicator, segment, value) cells. The browser applies deterministic HMAC-SHA256 noise before submitting. Noise cancels in the aggregate.'],
         ].map(([title, desc], i) => (
           <div key={i} className="calc-step">
             <div className="step-number">{i + 1}</div>

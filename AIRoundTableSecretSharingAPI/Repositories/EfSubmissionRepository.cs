@@ -16,6 +16,8 @@ public class EfSubmissionRepository : ISubmissionRepository
             s.ProducerId == submission.ProducerId &&
             s.Country == submission.Country &&
             s.Month == submission.Month &&
+            s.Indicator == submission.Indicator &&
+            s.Segment == submission.Segment &&
             s.EpochId == submission.EpochId);
 
         if (exists)
@@ -26,9 +28,26 @@ public class EfSubmissionRepository : ISubmissionRepository
         return true;
     }
 
-    public Task<List<MetricSubmission>> GetSubmissionsAsync(string country, string month, int epochId) =>
+    public async Task AddSubmissionsAsync(IReadOnlyList<MetricSubmission> submissions)
+    {
+        if (submissions.Count == 0)
+            return;
+
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        _db.Submissions.AddRange(submissions);
+        await _db.SaveChangesAsync();
+        await tx.CommitAsync();
+    }
+
+    public Task<List<MetricSubmission>> GetSubmissionsAsync(
+        string country, string month, string indicator, string segment, int epochId) =>
         _db.Submissions
-            .Where(s => s.Country == country && s.Month == month && s.EpochId == epochId)
+            .Where(s =>
+                s.Country == country &&
+                s.Month == month &&
+                s.Indicator == indicator &&
+                s.Segment == segment &&
+                s.EpochId == epochId)
             .ToListAsync();
 
     public Task<List<MetricSubmission>> GetSubmissionsByProducerAsync(string producerId, int epochId) =>
@@ -40,14 +59,6 @@ public class EfSubmissionRepository : ISubmissionRepository
         _db.Submissions
             .Where(s => s.EpochId == epochId)
             .ToListAsync();
-
-    public async Task<List<(string country, string month)>> GetDistinctCountryMonthPairsAsync(int epochId) =>
-        await _db.Submissions
-            .Where(s => s.EpochId == epochId)
-            .Select(s => new { s.Country, s.Month })
-            .Distinct()
-            .ToListAsync()
-            .ContinueWith(task => task.Result.Select(x => (x.Country, x.Month)).ToList());
 
     public async Task ClearAllAsync()
     {

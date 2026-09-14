@@ -1,12 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useMsal } from '@azure/msal-react'
 import * as api from '../utils/api'
+import { CELL_COUNT, formatInt } from '../utils/csvUpload'
 
 function formatEpochDate(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
+function formatMissingCells(cells) {
+  const n = cells?.length ?? 0
+  if (n === 0) return '—'
+  const preview = cells
+    .slice(0, 6)
+    .map((c) => `${c.country} ${c.month} ${c.indicator}/${c.segment}`)
+  const more = n > 6 ? ' …' : ''
+  return `${n} of ${CELL_COUNT} missing (${preview.join(', ')}${more})`
 }
 
 export default function AdminPanel() {
@@ -388,7 +399,7 @@ export default function AdminPanel() {
                         <td style={{ fontWeight: 600, fontFamily: 'Inter, sans-serif' }}>{p.displayName}</td>
                         <td className="text-muted" style={{ fontSize: '0.8rem' }}>{p.producerId}</td>
                         <td style={{ fontSize: '0.8rem' }}>
-                          {(p.missingCells ?? []).map((c) => `${c.country} ${c.month}`).join(', ') || '—'}
+                          {formatMissingCells(p.missingCells)}
                         </td>
                       </tr>
                     ))}
@@ -401,16 +412,20 @@ export default function AdminPanel() {
                   <tr>
                     <th>Country</th>
                     <th>Month</th>
+                    <th>Indicator</th>
+                    <th>Segment</th>
                     <th>Total</th>
                     <th>Submissions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {epochDetail.aggregates.map((r) => (
-                    <tr key={`${r.country}-${r.month}`}>
+                    <tr key={`${r.country}-${r.month}-${r.indicator}-${r.segment}`}>
                       <td style={{ fontWeight: 600 }}>{r.country}</td>
                       <td>{r.month}</td>
-                      <td className="text-success">{r.total != null ? r.total.toLocaleString() : '—'}</td>
+                      <td>{r.indicator}</td>
+                      <td>{r.segment}</td>
+                      <td className="text-success">{formatInt(r.total)}</td>
                       <td>{r.submissionCount}/{r.expectedSubmissions}</td>
                     </tr>
                   ))}

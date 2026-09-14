@@ -70,8 +70,11 @@ export const getMySubmissions = (token) => get('/metrics/mysubmissions', token)
 export const submitMetric = (submission, token) =>
   post('/metrics/submit', submission, token)
 
-export const getAggregate = (country, month, token) =>
-  get(`/metrics/aggregate?country=${encodeURIComponent(country)}&month=${encodeURIComponent(month)}`, token)
+export const submitMetricsBatch = (submissions, token) =>
+  post('/metrics/submit-batch', submissions, token)
+
+export const getAggregate = (country, month, indicator, segment, token) =>
+  get(`/metrics/aggregate?country=${encodeURIComponent(country)}&month=${encodeURIComponent(month)}&indicator=${encodeURIComponent(indicator)}&segment=${encodeURIComponent(segment)}`, token)
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 export const adminReset = (token) => post('/admin/reset', {}, token)

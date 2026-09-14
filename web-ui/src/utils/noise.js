@@ -1,12 +1,15 @@
-// Noise formula compatible with the Python client (HMAC-SHA256 based)
+// Noise formula compatible with the C# SecureNoiseGenerator (HMAC-SHA256 based)
 
-// Returns the signed noise value for one pair, deterministic from shared secret + (country, month)
-async function deriveNoise(sharedSecretBytes, country, month) {
+async function deriveNoise(sharedSecretBytes, country, month, indicator, segment) {
   const key = await crypto.subtle.importKey(
     'raw', sharedSecretBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
   )
   const hmac = new Uint8Array(
-    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${country}|${month}`))
+    await crypto.subtle.sign(
+      'HMAC',
+      key,
+      new TextEncoder().encode(`${country}|${month}|${indicator}|${segment}`)
+    )
   )
   // Signed little-endian int64 from first 8 bytes
   let seed = 0n
@@ -20,11 +23,12 @@ async function deriveNoise(sharedSecretBytes, country, month) {
 
 // secretsMap: Map<partnerId, Uint8Array(32)>
 // Sign convention: +1 if myId < partnerId (lexicographic), -1 otherwise
-export async function calculateMaskedValue(actual, country, month, myId, secretsMap) {
-  let masked = actual
+// `actual` may be a number, string, or bigint. Returns bigint.
+export async function calculateMaskedValue(actual, country, month, indicator, segment, myId, secretsMap) {
+  let masked = typeof actual === 'bigint' ? actual : BigInt(actual)
   for (const [partnerId, ss] of secretsMap) {
-    const noise = await deriveNoise(ss, country, month)
-    masked += noise * (myId < partnerId ? 1 : -1)
+    const noise = await deriveNoise(ss, country, month, indicator, segment)
+    masked += BigInt(noise) * (myId < partnerId ? 1n : -1n)
   }
   return masked
 }

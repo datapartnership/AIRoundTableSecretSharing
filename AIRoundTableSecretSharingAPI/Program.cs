@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
@@ -8,7 +9,11 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.NumberHandling = JsonNumberHandling.AllowReadingFromString;
+    });
 builder.Services.AddOpenApi();
 
 builder.Services.AddCors(options =>

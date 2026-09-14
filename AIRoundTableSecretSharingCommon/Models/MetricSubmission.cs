@@ -3,11 +3,13 @@ namespace AIRoundTableSecretSharingCommon.Models;
 public class MetricSubmission
 {
     public string? ProducerId { get; set; }   // set server-side from JWT
-    public string Country { get; set; }
-    public string Month { get; set; }
+    public string Country { get; set; } = string.Empty;
+    public string Month { get; set; } = string.Empty;
+    public string Indicator { get; set; } = string.Empty;
+    public string Segment { get; set; } = string.Empty;
 
     /// <summary>
-    /// Masked Monthly Active Users (MAU) value
+    /// Masked metric value (noise already applied client-side).
     /// </summary>
     public long Value { get; set; }
 

@@ -9,16 +9,17 @@ public interface ISubmissionRepository
     /// </summary>
     Task<bool> AddSubmissionAsync(MetricSubmission submission);
 
-    Task<List<MetricSubmission>> GetSubmissionsAsync(string country, string month, int epochId);
+    /// <summary>
+    /// Stores new submissions in a transaction. Caller must already exclude duplicates.
+    /// </summary>
+    Task AddSubmissionsAsync(IReadOnlyList<MetricSubmission> submissions);
+
+    Task<List<MetricSubmission>> GetSubmissionsAsync(
+        string country, string month, string indicator, string segment, int epochId);
 
     Task<List<MetricSubmission>> GetSubmissionsByProducerAsync(string producerId, int epochId);
 
     Task<List<MetricSubmission>> GetSubmissionsByEpochAsync(int epochId);
-
-    /// <summary>
-    /// Retrieves all distinct (country, month) pairs that have submissions in the given epoch.
-    /// </summary>
-    Task<List<(string country, string month)>> GetDistinctCountryMonthPairsAsync(int epochId);
 
     Task ClearAllAsync();
 }

@@ -55,7 +55,18 @@ namespace AIRoundTableSecretSharingAPI.Migrations
 
                     b.Property<string>("Month")
                         .IsRequired()
-                        .HasColumnType("nvarchar(450)");
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
+
+                    b.Property<string>("Indicator")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Segment")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.Property<string>("ProducerId")
                         .HasMaxLength(100)
@@ -73,7 +84,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProducerId", "Country", "Month", "EpochId")
+                    b.HasIndex("ProducerId", "Country", "Month", "Indicator", "Segment", "EpochId")
                         .IsUnique()
                         .HasFilter("[ProducerId] IS NOT NULL");
 

@@ -56,9 +56,11 @@ public class AppDbContext : DbContext
             e.HasKey("Id");
             e.Property(s => s.ProducerId).HasMaxLength(100);
             e.Property(s => s.Country).HasMaxLength(100);
+            e.Property(s => s.Month).HasMaxLength(7);
+            e.Property(s => s.Indicator).HasMaxLength(64);
+            e.Property(s => s.Segment).HasMaxLength(64);
             e.Property(s => s.Signature).HasMaxLength(500);
-            // Unique constraint mirrors duplicate-detection logic in the original store
-            e.HasIndex(s => new { s.ProducerId, s.Country, s.Month, s.EpochId }).IsUnique();
+            e.HasIndex(s => new { s.ProducerId, s.Country, s.Month, s.Indicator, s.Segment, s.EpochId }).IsUnique();
         });
 
         // PartnerPublicKey — ProducerId is the natural key; upsert replaces on re-register

@@ -232,6 +232,8 @@ public class SecureProducerClient : IDisposable
     public async Task<SubmissionResult> SubmitMetricSecure(
         string country,
         DateTime month,
+        string indicator,
+        string segment,
         long actualValue)
     {
         if (!_keysRegistered || !_encapsulationDone || !_decapsulationDone)
@@ -249,7 +251,8 @@ public class SecureProducerClient : IDisposable
         Console.WriteLine($"║  {_displayName} ({_producerId}) - SECURE METRIC SUBMISSION (ML-KEM-768)");
         Console.WriteLine($"╠═══════════════════════════════════════════════════════════════════════════╣");
         Console.WriteLine($"║  Country: {country,-20}                                            ║");
-        Console.WriteLine($"║  Month: {month:yyyy-MM,-22}                                            ║");
+        Console.WriteLine($"║  Indicator: {indicator,-17}                                            ║");
+        Console.WriteLine($"║  Segment: {segment,-19}                                            ║");
         Console.WriteLine($"║  ─────────────────────────────────────────────────────────────────────────║");
         Console.WriteLine($"║  Actual MAU:          {actualValue,15:N0}                                   ║");
         Console.WriteLine($"╚═══════════════════════════════════════════════════════════════════════════╝");
@@ -280,7 +283,8 @@ public class SecureProducerClient : IDisposable
         Console.WriteLine($"  MAU Noise Calculation:");
         foreach (var (otherProducerId, sharedSecret) in _sharedSecrets)
         {
-            var noise = SecureNoiseGenerator.GenerateNoise(sharedSecret, country, monthStart);
+            var noise = SecureNoiseGenerator.GenerateNoise(
+                sharedSecret, country, monthStart.ToString("yyyy-MM"), indicator, segment);
             var sign = SecureNoiseGenerator.GetNoiseSign(_producerId, otherProducerId);
             var appliedNoise = noise * sign;
 
@@ -303,6 +307,8 @@ public class SecureProducerClient : IDisposable
             ProducerId = _producerId,
             Country = country,
             Month = monthStart.ToString("yyyy-MM"),
+            Indicator = indicator,
+            Segment = segment,
             Value = maskedMAU,
             EpochId = epoch.EpochId,
             Signature = "mlkem-demo",

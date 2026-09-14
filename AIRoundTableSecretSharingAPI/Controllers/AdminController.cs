@@ -265,7 +265,13 @@ public class AdminController : ControllerBase
             {
                 ProducerId = g.Key,
                 DisplayName = NameOf(g.Key),
-                MissingCells = g.Select(c => new SubmittedEntry { Country = c.Country, Month = c.Month }).ToList()
+                MissingCells = g.Select(c => new SubmittedEntry
+                {
+                    Country = c.Country,
+                    Month = c.Month,
+                    Indicator = c.Indicator,
+                    Segment = c.Segment
+                }).ToList()
             })
             .ToList();
 
@@ -276,17 +282,25 @@ public class AdminController : ControllerBase
             {
                 foreach (var month in EpochGrid.Months(epoch.StartDate))
                 {
-                    var cell = submissions.Where(s => s.Country == country && s.Month == month).ToList();
-                    aggregates.Add(new AggregationResult
+                    foreach (var (indicator, segment) in EpochGrid.Series)
                     {
-                        Status = "complete",
-                        Country = country,
-                        Month = month,
-                        Total = cell.Sum(s => s.Value),
-                        SubmissionCount = cell.Count,
-                        ExpectedSubmissions = epoch.ProducerCount,
-                        MissingProducers = new List<string>()
-                    });
+                        var cell = submissions
+                            .Where(s => s.Country == country && s.Month == month
+                                        && s.Indicator == indicator && s.Segment == segment)
+                            .ToList();
+                        aggregates.Add(new AggregationResult
+                        {
+                            Status = "complete",
+                            Country = country,
+                            Month = month,
+                            Indicator = indicator,
+                            Segment = segment,
+                            Total = cell.Sum(s => s.Value).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            SubmissionCount = cell.Count,
+                            ExpectedSubmissions = epoch.ProducerCount,
+                            MissingProducers = new List<string>()
+                        });
+                    }
                 }
             }
         }

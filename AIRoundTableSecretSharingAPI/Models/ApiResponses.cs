@@ -58,6 +58,8 @@ public class SubmittedEntry
 {
     public string Country { get; set; } = string.Empty;
     public string Month { get; set; } = string.Empty;
+    public string Indicator { get; set; } = string.Empty;
+    public string Segment { get; set; } = string.Empty;
 }
 
 public class ProducerSubmissionsResponse

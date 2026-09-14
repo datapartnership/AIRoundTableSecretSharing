@@ -19,6 +19,8 @@ public class ProducerClient
     public async Task<SubmissionResult> SubmitMetric(
         string country,
         DateTime month,
+        string indicator,
+        string segment,
         long actualValue)
     {
         Console.WriteLine();
@@ -87,6 +89,8 @@ public class ProducerClient
                 otherProducerId,
                 country,
                 monthStart,
+                indicator,
+                segment,
                 maxNoise: 100_000_000 // Fixed value agreed by all partners
             );
             
@@ -116,6 +120,8 @@ public class ProducerClient
             ProducerId = _producerId,
             Country = country,
             Month = monthStart.ToString("yyyy-MM"),
+            Indicator = indicator,
+            Segment = segment,
             Value = maskedValue,
             EpochId = epoch.EpochId,
             Signature = "demo-signature",
