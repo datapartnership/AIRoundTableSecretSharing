@@ -9,6 +9,7 @@ on:
     paths:
       - "AIRoundTableSecretSharingAPI/**"
       - "AIRoundTableSecretSharingCommon/**"
+      - "web-ui/**"
       - "AIRoundTableSecretSharingCommon.sln"      
       - ".github/workflows/docker-publish-api.yml"
   pull_request:
@@ -17,6 +18,7 @@ on:
     paths:
       - "AIRoundTableSecretSharingAPI/**"
       - "AIRoundTableSecretSharingCommon/**"
+      - "web-ui/**"
       - "AIRoundTableSecretSharingCommon.sln"      
       - ".github/workflows/docker-publish-api.yml"
   workflow_dispatch:

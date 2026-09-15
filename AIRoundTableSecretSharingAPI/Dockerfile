@@ -6,7 +6,7 @@ FROM node:20-alpine AS web-ui-build
 WORKDIR /src/web-ui
 
 COPY ["web-ui/package.json", "web-ui/package-lock.json", "./"]
-RUN npm ci
+RUN npm ci --registry=https://registry.npmjs.org/ && test -x node_modules/.bin/vite
 
 COPY ["web-ui/index.html", "web-ui/vite.config.js", "web-ui/.env.production", "./"]
 COPY web-ui/public/ public/
