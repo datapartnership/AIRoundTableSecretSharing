@@ -341,6 +341,36 @@ Authorization policies are enforced via group membership embedded in the access 
 }
 ```
 
+These settings can also be supplied with environment variables. ASP.NET Core maps
+double underscores (`__`) to configuration section separators (`:`), so
+environment variables override the matching `appsettings.json` values:
+
+| Setting | Environment variable |
+| --- | --- |
+| `AzureAd:Instance` | `AzureAd__Instance` |
+| `AzureAd:TenantId` | `AzureAd__TenantId` |
+| `AzureAd:ClientId` | `AzureAd__ClientId` |
+| `AzureAd:AdminGroupId` | `AzureAd__AdminGroupId` |
+| `AzureAd:PartnerGroupId` | `AzureAd__PartnerGroupId` |
+| `ConnectionStrings:DefaultConnection` | `ConnectionStrings__DefaultConnection` |
+
+For example, when running the container locally:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e AzureAd__Instance="https://login.microsoftonline.com/" \
+  -e AzureAd__TenantId="<tenant-id>" \
+  -e AzureAd__ClientId="<api-app-client-id>" \
+  -e AzureAd__AdminGroupId="<admin-aad-group-object-id>" \
+  -e AzureAd__PartnerGroupId="<partner-aad-group-object-id>" \
+  -e ConnectionStrings__DefaultConnection="<sql-connection-string>" \
+  <image-name>
+```
+
+In Azure App Service or Container Apps, add the same names as application
+settings/environment variables. Do not bake tenant-specific values or connection
+strings into the Docker image.
+
 The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everywhere — no per-client secrets or pre-seeded partner lists are required.
 
 ## 🚀 Getting Started
@@ -349,9 +379,9 @@ The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everyw
 
 - .NET 10 SDK
 - Node.js 20+
-- Access to an Azure SQL database (update `ConnectionStrings:DefaultConnection` in `appsettings.json`)
+- Access to an Azure SQL database (set `ConnectionStrings:DefaultConnection` in `appsettings.json` or `ConnectionStrings__DefaultConnection` as an environment variable)
 - An Azure Entra ID tenant with:
-  - An API app registration (set as `AzureAd:ClientId` in `appsettings.json`)
+  - An API app registration (set as `AzureAd:ClientId` in `appsettings.json` or `AzureAd__ClientId` as an environment variable)
   - A Web UI app registration (set in `web-ui/src/main.jsx`)
   - An admin security group and a partner security group
 
