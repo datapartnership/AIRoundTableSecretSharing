@@ -12,7 +12,7 @@ public class EfKeyRepository : IKeyRepository
 
     public async Task RegisterKeyAsync(PartnerPublicKey key)
     {
-        var existing = await _db.PublicKeys.FindAsync(key.ProducerId);
+        var existing = await _db.PublicKeys.FindAsync(key.EpochId, key.ProducerId, key.DeviceId);
         if (existing != null)
         {
             existing.PublicKeyBase64 = key.PublicKeyBase64;
@@ -25,15 +25,18 @@ public class EfKeyRepository : IKeyRepository
         await _db.SaveChangesAsync();
     }
 
-    public Task<PartnerPublicKey?> GetKeyAsync(string producerId) =>
-        _db.PublicKeys.FindAsync(producerId).AsTask();
+    public Task<PartnerPublicKey?> GetKeyAsync(int epochId, string producerId, string deviceId) =>
+        _db.PublicKeys.FindAsync(epochId, producerId, deviceId).AsTask();
 
-    public Task<List<PartnerPublicKey>> GetAllKeysAsync() =>
-        _db.PublicKeys.ToListAsync();
+    public Task<List<PartnerPublicKey>> GetAllKeysAsync(int epochId) =>
+        _db.PublicKeys.Where(k => k.EpochId == epochId).ToListAsync();
 
-    public async Task ClearAsync()
+    public async Task ClearAsync(int? epochId = null)
     {
-        _db.PublicKeys.RemoveRange(_db.PublicKeys);
+        var keys = epochId.HasValue
+            ? _db.PublicKeys.Where(k => k.EpochId == epochId.Value)
+            : _db.PublicKeys;
+        _db.PublicKeys.RemoveRange(keys);
         await _db.SaveChangesAsync();
     }
 }

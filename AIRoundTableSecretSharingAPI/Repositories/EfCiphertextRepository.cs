@@ -13,7 +13,9 @@ public class EfCiphertextRepository : ICiphertextRepository
     public async Task StoreAsync(PartnerCiphertext ciphertext)
     {
         var existing = await _db.Ciphertexts
-            .FirstOrDefaultAsync(c => c.SenderId == ciphertext.SenderId && c.RecipientId == ciphertext.RecipientId);
+            .FirstOrDefaultAsync(c => c.EpochId == ciphertext.EpochId
+                && c.SenderId == ciphertext.SenderId && c.SenderDeviceId == ciphertext.SenderDeviceId
+                && c.RecipientId == ciphertext.RecipientId && c.RecipientDeviceId == ciphertext.RecipientDeviceId);
 
         if (existing != null)
         {
@@ -28,34 +30,39 @@ public class EfCiphertextRepository : ICiphertextRepository
         await _db.SaveChangesAsync();
     }
 
-    public Task<PartnerCiphertext?> GetAsync(string senderId, string recipientId) =>
-        _db.Ciphertexts.FirstOrDefaultAsync(c => c.SenderId == senderId && c.RecipientId == recipientId);
+    public Task<PartnerCiphertext?> GetAsync(int epochId, string senderId, string senderDeviceId, string recipientId, string recipientDeviceId) =>
+        _db.Ciphertexts.FirstOrDefaultAsync(c => c.EpochId == epochId
+            && c.SenderId == senderId && c.SenderDeviceId == senderDeviceId
+            && c.RecipientId == recipientId && c.RecipientDeviceId == recipientDeviceId);
 
-    public Task<List<PartnerCiphertext>> GetForRecipientAsync(string recipientId) =>
+    public Task<List<PartnerCiphertext>> GetForRecipientAsync(int epochId, string recipientId, string recipientDeviceId) =>
         _db.Ciphertexts
-            .Where(c => c.RecipientId == recipientId)
+            .Where(c => c.EpochId == epochId && c.RecipientId == recipientId && c.RecipientDeviceId == recipientDeviceId)
             .ToListAsync();
 
-    public Task<List<PartnerCiphertext>> GetForSenderAsync(string senderId) =>
+    public Task<List<PartnerCiphertext>> GetForSenderAsync(int epochId, string senderId, string senderDeviceId) =>
         _db.Ciphertexts
-            .Where(c => c.SenderId == senderId)
+            .Where(c => c.EpochId == epochId && c.SenderId == senderId && c.SenderDeviceId == senderDeviceId)
             .ToListAsync();
 
-    public Task<int> CountForPartnersAsync(List<string> partnerIds) =>
+    public Task<int> CountForPartnersAsync(int epochId, List<string> partnerIds) =>
         _db.Ciphertexts
-            .Where(c => partnerIds.Contains(c.SenderId) && partnerIds.Contains(c.RecipientId))
+            .Where(c => c.EpochId == epochId && partnerIds.Contains(c.SenderId) && partnerIds.Contains(c.RecipientId))
             .CountAsync();
 
-    public Task<List<string>> GetSenderIdsForPartnersAsync(List<string> partnerIds) =>
+    public Task<List<string>> GetSenderIdsForPartnersAsync(int epochId, List<string> partnerIds) =>
         _db.Ciphertexts
-            .Where(c => partnerIds.Contains(c.SenderId) && partnerIds.Contains(c.RecipientId))
+            .Where(c => c.EpochId == epochId && partnerIds.Contains(c.SenderId) && partnerIds.Contains(c.RecipientId))
             .Select(c => c.SenderId)
             .Distinct()
             .ToListAsync();
 
-    public async Task ClearAsync()
+    public async Task ClearAsync(int? epochId = null)
     {
-        _db.Ciphertexts.RemoveRange(_db.Ciphertexts);
+        var ciphertexts = epochId.HasValue
+            ? _db.Ciphertexts.Where(c => c.EpochId == epochId.Value)
+            : _db.Ciphertexts;
+        _db.Ciphertexts.RemoveRange(ciphertexts);
         await _db.SaveChangesAsync();
     }
 }

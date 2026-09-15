@@ -5,11 +5,20 @@ import { generateMlKemKeyPair, encapsulate, decapsulate, bytesToBase64, base64To
 import { calculateMaskedValue } from '../utils/noise'
 import { parseAndValidateCsv, isCsvFile, epochMonths, CELL_COUNT, ERROR_DISPLAY_CAP, formatInt } from '../utils/csvUpload'
 
-const kpKey = (id) => `mlkem_kp_${id}`
-const ssKey = (id) => `mlkem_ss_${id}`
-const ctKey = (id) => `mlkem_ct_${id}`
-const ctSeenKey = (id) => `mlkem_ctseen_${id}`
-const epKey = (id) => `mlkem_epoch_${id}`
+const deviceKey = 'mlkem_device_id'
+const getDeviceId = () => {
+  let id = localStorage.getItem(deviceKey)
+  if (!id) {
+    id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    localStorage.setItem(deviceKey, id)
+  }
+  return id
+}
+const scoped = (id, epochId, deviceId) => `${id}_${epochId}_${deviceId}`
+const kpKey = (id, epochId, deviceId) => `mlkem_kp_${scoped(id, epochId, deviceId)}`
+const ssKey = (id, epochId, deviceId) => `mlkem_ss_${scoped(id, epochId, deviceId)}`
+const ctKey = (id, epochId, deviceId) => `mlkem_ct_${scoped(id, epochId, deviceId)}`
+const ctSeenKey = (id, epochId, deviceId) => `mlkem_ctseen_${scoped(id, epochId, deviceId)}`
 
 const POLL_MS = 2000
 const TAG = '[protocol]'
@@ -29,39 +38,39 @@ function fail(event, err, data) {
   else console.error(TAG, event, err, data)
 }
 
-function wipeLocalCrypto(id) {
-  localStorage.removeItem(kpKey(id))
-  localStorage.removeItem(ssKey(id))
-  localStorage.removeItem(ctKey(id))
-  localStorage.removeItem(ctSeenKey(id))
+function wipeLocalCrypto(id, epochId, deviceId) {
+  localStorage.removeItem(kpKey(id, epochId, deviceId))
+  localStorage.removeItem(ssKey(id, epochId, deviceId))
+  localStorage.removeItem(ctKey(id, epochId, deviceId))
+  localStorage.removeItem(ctSeenKey(id, epochId, deviceId))
 }
 
-function persistSecrets(id, map) {
-  localStorage.setItem(ssKey(id), JSON.stringify(
+function persistSecrets(id, epochId, deviceId, map) {
+  localStorage.setItem(ssKey(id, epochId, deviceId), JSON.stringify(
     Object.fromEntries([...map].map(([k, v]) => [k, bytesToBase64(v)]))
   ))
 }
 
-function persistSent(id, sent) {
-  localStorage.setItem(ctKey(id), JSON.stringify([...sent]))
+function persistSent(id, epochId, deviceId, sent) {
+  localStorage.setItem(ctKey(id, epochId, deviceId), JSON.stringify([...sent]))
 }
 
-function persistSeen(id, map) {
-  localStorage.setItem(ctSeenKey(id), JSON.stringify(Object.fromEntries(map)))
+function persistSeen(id, epochId, deviceId, map) {
+  localStorage.setItem(ctSeenKey(id, epochId, deviceId), JSON.stringify(Object.fromEntries(map)))
 }
 
-function loadLocalCrypto(id) {
+function loadLocalCrypto(id, epochId, deviceId) {
   let keyPair = null
   const secrets = new Map()
   let sentTo = new Set()
   const ctSeen = new Map()
 
-  const kp = localStorage.getItem(kpKey(id))
+  const kp = localStorage.getItem(kpKey(id, epochId, deviceId))
   if (kp) {
     try { keyPair = JSON.parse(kp) } catch { keyPair = null }
   }
 
-  const ss = localStorage.getItem(ssKey(id))
+  const ss = localStorage.getItem(ssKey(id, epochId, deviceId))
   if (ss) {
     try {
       for (const [k, v] of Object.entries(JSON.parse(ss))) {
@@ -70,12 +79,12 @@ function loadLocalCrypto(id) {
     } catch { /* ignore corrupt cache */ }
   }
 
-  const ct = localStorage.getItem(ctKey(id))
+  const ct = localStorage.getItem(ctKey(id, epochId, deviceId))
   if (ct) {
     try { sentTo = new Set(JSON.parse(ct)) } catch { sentTo = new Set() }
   }
 
-  const seen = localStorage.getItem(ctSeenKey(id))
+  const seen = localStorage.getItem(ctSeenKey(id, epochId, deviceId))
   if (seen) {
     try {
       for (const [k, v] of Object.entries(JSON.parse(seen))) ctSeen.set(k, v)
@@ -90,6 +99,7 @@ export default function ProtocolFlow() {
   const account = accounts[0]
   // Azure AD OID matches the JWT sub claim the API uses for metrics
   const myId = account?.localAccountId ?? ''
+  const deviceId = getDeviceId()
 
   const [step, setStep] = useState(1)
   const [hydrated, setHydrated] = useState(false)
@@ -139,8 +149,8 @@ export default function ProtocolFlow() {
     setKeyError(null)
   }
 
-  const applyLocalCrypto = (id) => {
-    const local = loadLocalCrypto(id)
+  const applyLocalCrypto = (id, epochId, currentDeviceId = deviceId) => {
+    const local = loadLocalCrypto(id, epochId, currentDeviceId)
     log('restored local crypto', {
       hasKeyPair: !!local.keyPair,
       secretPartners: [...local.secrets.keys()],
@@ -165,7 +175,6 @@ export default function ProtocolFlow() {
         const ep = await api.getEpoch(token)
         if (cancelled) return
         setEpoch(ep)
-        const storedEpochId = localStorage.getItem(epKey(myId))
         log('hydrate', {
           myId,
           epochId: ep.epochId,
@@ -173,18 +182,12 @@ export default function ProtocolFlow() {
           storedEpochId,
           isClosed: !!ep.isClosed,
         })
-        if (storedEpochId !== String(ep.epochId)) {
-          warn('epoch changed — wiping local crypto', { storedEpochId, epochId: ep.epochId })
-          wipeLocalCrypto(myId)
-          localStorage.setItem(epKey(myId), String(ep.epochId))
-          applyClearedCrypto()
-        } else {
-          applyLocalCrypto(myId)
-        }
+        applyLocalCrypto(myId, ep.epochId, deviceId)
       } catch (e) {
         fail('hydrate failed — using local cache', e)
         if (cancelled) return
-        applyLocalCrypto(myId)
+        if (epoch?.epochId) applyLocalCrypto(myId, epoch.epochId, deviceId)
+        else applyClearedCrypto()
       } finally {
         if (!cancelled) {
           setHydrated(true)
@@ -194,7 +197,7 @@ export default function ProtocolFlow() {
     })()
 
     return () => { cancelled = true }
-  }, [myId, instance, account])
+  }, [myId, instance, account, deviceId])
 
   // ── Self-register as producer on first visit ─────────────────────────────────
   useEffect(() => {
@@ -216,19 +219,9 @@ export default function ProtocolFlow() {
         const ep = await api.getEpoch(token)
         if (!alive) return
 
-        const storedEpochId = localStorage.getItem(epKey(myId))
-        if (storedEpochId !== String(ep.epochId)) {
-          warn('poll: epoch changed — wiping local crypto', { storedEpochId, epochId: ep.epochId })
-          wipeLocalCrypto(myId)
-          localStorage.setItem(epKey(myId), String(ep.epochId))
-          setEpoch(ep)
-          applyClearedCrypto()
-          return
-        }
-
         setEpoch(ep)
 
-        if (ep.isClosed) {
+        if (ep.isClosed || ep.isEligible === false) {
           log('poll: epoch closed — waiting for a new epoch', { epochId: ep.epochId })
           return
         }
@@ -239,9 +232,9 @@ export default function ProtocolFlow() {
         }
 
         const [s, pk, sent] = await Promise.all([
-          api.getKeyExchangeStatus(token),
-          api.getPartnerKeys(myId, token),
-          api.getSentCiphertexts(token).catch(() => ({ ciphertexts: [] })),
+          api.getKeyExchangeStatus(ep.epochId, deviceId, token),
+          api.getPartnerKeys(ep.epochId, deviceId, token),
+          api.getSentCiphertexts(ep.epochId, deviceId, token).catch(() => ({ ciphertexts: [] })),
         ])
         if (!alive) return
 
@@ -253,7 +246,7 @@ export default function ProtocolFlow() {
           setSentTo((prev) => {
             const next = new Set(prev)
             for (const id of serverSent) next.add(id)
-            persistSent(myId, next)
+            persistSent(myId, ep.epochId, deviceId, next)
             return next
           })
         }
@@ -292,13 +285,12 @@ export default function ProtocolFlow() {
     poll()
     const id = setInterval(poll, POLL_MS)
     return () => { alive = false; clearInterval(id) }
-  }, [hydrated, step, myId, instance, account?.homeAccountId])
+  }, [hydrated, step, myId, instance, account?.homeAccountId, deviceId])
 
   // ── Manual state reset (escape hatch for stuck states) ─────────────────────
   const resetLocalState = () => {
     warn('manual reset local state', { myId })
-    wipeLocalCrypto(myId)
-    localStorage.removeItem(epKey(myId))
+    wipeLocalCrypto(myId, epoch?.epochId, deviceId)
     applyClearedCrypto()
     setHydrated(true)
   }
@@ -312,10 +304,10 @@ export default function ProtocolFlow() {
       const existing = keyPairRef.current
       const kp = existing ?? await generateMlKemKeyPair()
       log(existing ? 're-registering existing key' : 'generated new key pair', { myId })
-      await api.registerPublicKey(myId, kp.ekBase64, token)
+      await api.registerPublicKey(epoch.epochId, deviceId, kp.ekBase64, token)
       log('public key registered')
       if (!existing) {
-        localStorage.setItem(kpKey(myId), JSON.stringify(kp))
+        localStorage.setItem(kpKey(myId, epoch.epochId, deviceId), JSON.stringify(kp))
         setKeyPair(kp)
       }
     } catch (e) {
@@ -324,7 +316,7 @@ export default function ProtocolFlow() {
     } finally {
       setKeyBusy(false)
     }
-  }, [instance, account, myId])
+  }, [instance, account, myId, epoch, deviceId])
 
   // ── Step 2: encapsulate for all smaller-ID partners (never overwrite) ───────
   const performEncapsulation = useCallback(async () => {
@@ -350,12 +342,12 @@ export default function ProtocolFlow() {
         }
 
         const { ctBase64, sharedSecret } = await encapsulate(pk.publicKeyBase64)
-        await api.postCiphertext(myId, pk.producerId, ctBase64, token)
+        await api.postCiphertext(epoch.epochId, deviceId, pk.producerId, pk.deviceId, ctBase64, token)
         log('encapsulated + posted ciphertext', { recipient: pk.producerId, ctBytes: ctBase64?.length })
         newSecrets.set(pk.producerId, sharedSecret)
         newSent.add(pk.producerId)
-        persistSecrets(myId, newSecrets)
-        persistSent(myId, newSent)
+        persistSecrets(myId, epoch.epochId, deviceId, newSecrets)
+        persistSent(myId, epoch.epochId, deviceId, newSent)
       }
 
       secretsRef.current = newSecrets
@@ -369,7 +361,7 @@ export default function ProtocolFlow() {
     } finally {
       setEncapBusy(false)
     }
-  }, [instance, account, myId, partnerKeys])
+  }, [instance, account, myId, epoch, deviceId, partnerKeys])
 
   // ── Step 3: decapsulate received ciphertexts (re-run if blob changed) ───────
   const performDecapsulation = useCallback(async () => {
@@ -382,7 +374,7 @@ export default function ProtocolFlow() {
     setEncapError(null)
     try {
       const token = await api.acquireApiToken(instance, account)
-      const { ciphertexts } = await api.getCiphertexts(token)
+      const { ciphertexts } = await api.getCiphertexts(epoch.epochId, deviceId, token)
       log('decapsulation start', { receivedFrom: (ciphertexts ?? []).map((c) => c.senderId) })
       const newSecrets = new Map(secretsRef.current)
       const seen = new Map(ctSeenRef.current)
@@ -398,8 +390,8 @@ export default function ProtocolFlow() {
         seen.set(ct.senderId, ct.ciphertextBase64)
       }
 
-      persistSecrets(myId, newSecrets)
-      persistSeen(myId, seen)
+      persistSecrets(myId, epoch.epochId, deviceId, newSecrets)
+      persistSeen(myId, epoch.epochId, deviceId, seen)
       secretsRef.current = newSecrets
       ctSeenRef.current = seen
       setSharedSecrets(newSecrets)
@@ -411,7 +403,7 @@ export default function ProtocolFlow() {
     } finally {
       setEncapBusy(false)
     }
-  }, [instance, account, myId])
+  }, [instance, account, myId, epoch, deviceId])
 
   // ── Step 4: load epoch + existing submissions ────────────────────────────────
   useEffect(() => {
@@ -419,7 +411,7 @@ export default function ProtocolFlow() {
     ;(async () => {
       try {
         const token = await api.acquireApiToken(instance, account)
-        const my = await api.getMySubmissions(token)
+        const my = await api.getMySubmissions(epoch.epochId, token)
         const done = new Set((my.submissions ?? []).map((s) => `${s.country}|${s.month}|${s.indicator}|${s.segment}`))
         log('loaded submissions', { cells: done.size })
         setSubmittedCells(done)
@@ -513,7 +505,7 @@ export default function ProtocolFlow() {
 
   // Step 1: auto-generate only after restore, and only if the server has no key yet
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 1 || keyPair || keyBusy || !epoch || !myId) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 1 || keyPair || keyBusy || !epoch || !myId) return
     if (status?.myPublicKeyBase64) return
     log('auto: generate and register key')
     generateAndRegister()
@@ -521,7 +513,7 @@ export default function ProtocolFlow() {
 
   // Step 1 → 2: advance once all epoch partners registered AND we hold the matching private key
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 1 || !keyPair || !keysMatch) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 1 || !keyPair || !keysMatch) return
     if (!status?.isComplete || !status?.registeredPartners?.includes(myId)) return
     log('step 1 → 2 (all keys registered)')
     setStep(2)
@@ -529,7 +521,7 @@ export default function ProtocolFlow() {
 
   // Step 2: auto-encapsulate once the full epoch key set is present
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 2 || encapBusy || encapError || !epochKeysReady) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 2 || encapBusy || encapError || !epochKeysReady) return
     if (expectedSmallerIds.length === 0 || allEncapsDone) return
     log('auto: encapsulate', { expectedSmallerIds })
     performEncapsulation()
@@ -537,7 +529,7 @@ export default function ProtocolFlow() {
 
   // Step 2 → 3: wait for every smaller epoch partner, not a partial poll snapshot
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 2 || !epochKeysReady) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 2 || !epochKeysReady) return
     if (expectedSmallerIds.length === 0 || allEncapsDone) {
       log('step 2 → 3 (encapsulation complete)', { expectedSmallerIds, allEncapsDone })
       setStep(3)
@@ -546,7 +538,7 @@ export default function ProtocolFlow() {
 
   // Step 3: auto-decapsulate whenever new ciphertexts arrive
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 3 || encapBusy || encapError || !keyPair || allDecapsDone) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 3 || encapBusy || encapError || !keyPair || allDecapsDone) return
     if (expectedLargerIds.length === 0) return
     log('auto: decapsulate', { expectedLargerIds, actualCiphertexts: status?.actualCiphertexts })
     performDecapsulation()
@@ -554,7 +546,7 @@ export default function ProtocolFlow() {
 
   // Step 3 → 4: advance when ciphertext exchange is complete and all secrets derived
   useEffect(() => {
-    if (!hydrated || epoch?.isClosed || step !== 3) return
+    if (!hydrated || epoch?.isClosed || epoch?.isEligible === false || step !== 3) return
     if (epochPartnerIds.length < 2) return
     if (expectedLargerIds.length === 0 && exchangeComplete) {
       log('step 3 → 4 (nothing to receive, exchange complete)')
@@ -767,6 +759,18 @@ export default function ProtocolFlow() {
     </div>
   )
 
+  const renderNotEligible = () => (
+    <div className="card animate-fade-in">
+      <div className="card-header">
+        <span className="card-icon">🔒</span>
+        <h2 className="card-title">Not eligible for this epoch</h2>
+      </div>
+      <div className="info-box">
+        Your account is not listed as a participant in epoch {epoch?.epochId}. You can view its status, but you cannot exchange keys or submit metrics.
+      </div>
+    </div>
+  )
+
   return (
     <div className="animate-fade-in">
       <div className="page-header">
@@ -775,7 +779,11 @@ export default function ProtocolFlow() {
       </div>
 
       {renderStatusBar()}
-      {epoch?.isClosed ? renderWaiting() : step < 4 ? renderSetup() : renderSubmit()}
+      {epoch?.isEligible === false
+        ? renderNotEligible()
+        : epoch?.isClosed
+          ? renderWaiting()
+          : step < 4 ? renderSetup() : renderSubmit()}
     </div>
   )
 }

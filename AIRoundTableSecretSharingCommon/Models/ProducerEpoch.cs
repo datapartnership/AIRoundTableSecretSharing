@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace AIRoundTableSecretSharingCommon.Models;
 
 public class ProducerEpoch
@@ -9,4 +11,8 @@ public class ProducerEpoch
     public int ProducerCount { get; set; }
     /// <summary>True once every producer has submitted every required country/month cell.</summary>
     public bool IsClosed { get; set; }
+    [NotMapped]
+    public bool IsEligible { get; set; }
+    [NotMapped]
+    public bool CanParticipate => IsEligible && !IsClosed;
 }

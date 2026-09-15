@@ -5,7 +5,7 @@ namespace AIRoundTableSecretSharingAPI.Repositories;
 public interface IKeyRepository
 {
     Task RegisterKeyAsync(PartnerPublicKey key);
-    Task<PartnerPublicKey?> GetKeyAsync(string producerId);
-    Task<List<PartnerPublicKey>> GetAllKeysAsync();
-    Task ClearAsync();
+    Task<PartnerPublicKey?> GetKeyAsync(int epochId, string producerId, string deviceId);
+    Task<List<PartnerPublicKey>> GetAllKeysAsync(int epochId);
+    Task ClearAsync(int? epochId = null);
 }

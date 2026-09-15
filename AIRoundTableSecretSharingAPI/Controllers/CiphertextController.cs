@@ -20,11 +20,13 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 public class CiphertextController : ControllerBase
 {
     private readonly ICiphertextRepository _ciphertextRepo;
+    private readonly IProducerRepository _producerRepo;
     private readonly ILogger<CiphertextController> _logger;
 
-    public CiphertextController(ICiphertextRepository ciphertextRepo, ILogger<CiphertextController> logger)
+    public CiphertextController(ICiphertextRepository ciphertextRepo, IProducerRepository producerRepo, ILogger<CiphertextController> logger)
     {
         _ciphertextRepo = ciphertextRepo;
+        _producerRepo = producerRepo;
         _logger = logger;
     }
 
@@ -38,13 +40,21 @@ public class CiphertextController : ControllerBase
     public async Task<ActionResult<MessageResponse>> StoreCiphertext([FromBody] StoreCiphertextRequest request)
     {
         // Identity comes from the token; body field is ignored
-        request.SenderId = User.GetOid()!;
+        var senderId = User.GetOid();
+        if (senderId == null)
+            return Unauthorized();
+        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId) ||
+            string.IsNullOrWhiteSpace(request.RecipientDeviceId))
+            return BadRequest("EpochId, DeviceId, and RecipientDeviceId are required.");
+        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
+        if (epoch == null || !epoch.ProducerIds.Contains(senderId) || !epoch.ProducerIds.Contains(request.RecipientId))
+            return Forbid();
 
         if (string.IsNullOrEmpty(request.RecipientId) ||
             string.IsNullOrEmpty(request.CiphertextBase64))
             return BadRequest("RecipientId and CiphertextBase64 are required.");
 
-        if (request.SenderId == request.RecipientId)
+        if (senderId == request.RecipientId)
             return BadRequest("SenderId and RecipientId must differ.");
 
         try
@@ -59,7 +69,8 @@ public class CiphertextController : ControllerBase
             return BadRequest("CiphertextBase64 is not valid Base64.");
         }
 
-        var existing = await _ciphertextRepo.GetAsync(request.SenderId, request.RecipientId);
+        var existing = await _ciphertextRepo.GetAsync(
+            request.EpochId, senderId, request.DeviceId, request.RecipientId, request.RecipientDeviceId);
         if (existing != null)
         {
             if (existing.CiphertextBase64 == request.CiphertextBase64)
@@ -73,8 +84,11 @@ public class CiphertextController : ControllerBase
 
         var ct = new PartnerCiphertext
         {
-            SenderId = request.SenderId,
+            EpochId = request.EpochId,
+            SenderId = senderId,
+            SenderDeviceId = request.DeviceId,
             RecipientId = request.RecipientId,
+            RecipientDeviceId = request.RecipientDeviceId,
             CiphertextBase64 = request.CiphertextBase64,
             StoredAt = DateTime.UtcNow
         };
@@ -83,7 +97,7 @@ public class CiphertextController : ControllerBase
 
         _logger.LogInformation(
             "Stored ML-KEM ciphertext from {Sender} to {Recipient}.",
-            request.SenderId, request.RecipientId);
+            senderId, request.RecipientId);
 
         return Ok(new MessageResponse { Message = "Ciphertext stored." });
     }
@@ -94,13 +108,13 @@ public class CiphertextController : ControllerBase
     [HttpGet("sent")]
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
     [ProducesResponseType(401)]
-    public async Task<ActionResult<CiphertextResponse>> GetSentCiphertexts()
+    public async Task<ActionResult<CiphertextResponse>> GetSentCiphertexts([FromQuery] int epochId, [FromQuery] string deviceId)
     {
         var senderId = User.GetOid();
         if (string.IsNullOrEmpty(senderId))
             return Unauthorized();
 
-        var ciphertexts = await _ciphertextRepo.GetForSenderAsync(senderId);
+        var ciphertexts = await _ciphertextRepo.GetForSenderAsync(epochId, senderId, deviceId);
         return Ok(new CiphertextResponse { Ciphertexts = ciphertexts });
     }
 
@@ -111,7 +125,7 @@ public class CiphertextController : ControllerBase
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
     [ProducesResponseType(401)]
     [ProducesResponseType(403)]
-    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] string? recipientId = null)
+    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] int epochId, [FromQuery] string deviceId, [FromQuery] string? recipientId = null)
     {
         var oid = User.GetOid();
         if (string.IsNullOrEmpty(oid))
@@ -120,7 +134,7 @@ public class CiphertextController : ControllerBase
         if (!string.IsNullOrEmpty(recipientId) && recipientId != oid)
             return Forbid();
 
-        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(oid);
+        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(epochId, oid, deviceId);
 
         _logger.LogInformation(
             "Returning {Count} ciphertext(s) for {Recipient}.",

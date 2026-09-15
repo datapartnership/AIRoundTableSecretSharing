@@ -105,9 +105,6 @@ public class AdminController : ControllerBase
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            await _ciphertextRepo.ClearAsync();
-            await _keyRepo.ClearAsync();
-
             foreach (var item in normalizedProducers)
             {
                 await _producerRepo.UpsertProducerAsync(new ProducerInfo
@@ -124,9 +121,10 @@ public class AdminController : ControllerBase
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
 
+            var existingEpochIds = (await _producerRepo.GetAllEpochsAsync()).Select(e => e.EpochId);
             var epoch = new ProducerEpoch
             {
-                EpochId = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                EpochId = existingEpochIds.DefaultIfEmpty(0).Max() + 1,
                 StartDate = startDate,
                 EndDate = null,
                 ProducerIds = sortedProducerIds,

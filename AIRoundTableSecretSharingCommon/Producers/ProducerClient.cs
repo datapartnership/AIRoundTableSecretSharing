@@ -49,6 +49,14 @@ public class ProducerClient
         }
         
         var producers = await producersResponse.Content.ReadFromJsonAsync<List<ProducerInfo>>();
+        if (producers is null)
+        {
+            return new SubmissionResult
+            {
+                Success = false,
+                Message = "Producer list response was empty"
+            };
+        }
         var producerIds = producers.Select(p => p.ProducerId).OrderBy(id => id).ToList();
         
         Console.WriteLine($"  Active producers: {string.Join(", ", producerIds)}");
@@ -68,7 +76,15 @@ public class ProducerClient
         var epochResponse = await _httpClient.GetAsync(
             $"/api/registry/epoch?date={monthStart:yyyy-MM-dd}");
         var epoch = await epochResponse.Content.ReadFromJsonAsync<ProducerEpoch>();
-        
+        if (epoch is null)
+        {
+            return new SubmissionResult
+            {
+                Success = false,
+                Message = "Epoch response was empty"
+            };
+        }
+
         Console.WriteLine($"Step 2: Current epoch is {epoch.EpochId} with {epoch.ProducerCount} producers");
         Console.WriteLine();
         

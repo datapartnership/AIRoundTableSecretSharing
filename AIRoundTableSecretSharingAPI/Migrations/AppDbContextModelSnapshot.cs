@@ -17,7 +17,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -53,24 +53,24 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<int>("EpochId")
                         .HasColumnType("int");
 
-                    b.Property<string>("Month")
-                        .IsRequired()
-                        .HasMaxLength(7)
-                        .HasColumnType("nvarchar(7)");
-
                     b.Property<string>("Indicator")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
-                    b.Property<string>("Segment")
+                    b.Property<string>("Month")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)");
 
                     b.Property<string>("ProducerId")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Segment")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.Property<string>("Signature")
                         .HasMaxLength(500)
@@ -93,11 +93,22 @@ namespace AIRoundTableSecretSharingAPI.Migrations
 
             modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.PartnerCiphertext", b =>
                 {
+                    b.Property<int>("EpochId")
+                        .HasColumnType("int");
+
                     b.Property<string>("SenderId")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<string>("SenderDeviceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<string>("RecipientId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("RecipientDeviceId")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
@@ -108,14 +119,21 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<DateTime>("StoredAt")
                         .HasColumnType("datetime2");
 
-                    b.HasKey("SenderId", "RecipientId");
+                    b.HasKey("EpochId", "SenderId", "SenderDeviceId", "RecipientId", "RecipientDeviceId");
 
                     b.ToTable("Ciphertexts");
                 });
 
             modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.PartnerPublicKey", b =>
                 {
+                    b.Property<int>("EpochId")
+                        .HasColumnType("int");
+
                     b.Property<string>("ProducerId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("DeviceId")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
@@ -126,7 +144,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<DateTime>("RegisteredAt")
                         .HasColumnType("datetime2");
 
-                    b.HasKey("ProducerId");
+                    b.HasKey("EpochId", "ProducerId", "DeviceId");
 
                     b.ToTable("PublicKeys");
                 });

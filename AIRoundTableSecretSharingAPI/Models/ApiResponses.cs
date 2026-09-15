@@ -85,12 +85,16 @@ public class EpochSummary
     public DateTime? EndDate { get; set; }
     public int ProducerCount { get; set; }
     public bool IsClosed { get; set; }
+    public List<string> ProducerIds { get; set; } = new();
+    public bool IsEligible { get; set; }
+    public bool CanParticipate => IsEligible && !IsClosed;
 }
 
 public class EpochListResponse
 {
     public List<EpochSummary> Epochs { get; set; } = new();
 }
+
 
 public class EpochPartnerInfo
 {

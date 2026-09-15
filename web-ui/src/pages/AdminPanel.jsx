@@ -243,7 +243,7 @@ export default function AdminPanel() {
         {/* Clear All Data */}
         <div style={{ borderTop: '1px solid var(--gray-200)', paddingTop: '1rem', marginTop: '0.5rem' }}>
           {!clearConfirm ? (
-            <button className="btn btn-secondary" className="text-danger" style={{ fontSize: '0.8rem' }}
+            <button className="btn btn-secondary text-danger" style={{ fontSize: '0.8rem' }}
               onClick={() => setClearConfirm(true)}>
               🗑 Clear All Data
             </button>

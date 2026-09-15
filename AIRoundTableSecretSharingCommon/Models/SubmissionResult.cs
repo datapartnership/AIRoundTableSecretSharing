@@ -3,12 +3,12 @@ namespace AIRoundTableSecretSharingCommon.Models;
 public class SubmissionResult
 {
     public bool Success { get; set; }
-    public string Message { get; set; }
-    public string ProducerId { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string ProducerId { get; set; } = string.Empty;
     
     // MAU values
     public long OriginalValue { get; set; }
     public long MaskedValue { get; set; }
     public long NoiseApplied { get; set; }
-    public Dictionary<string, long> NoiseBreakdown { get; set; }
+    public Dictionary<string, long> NoiseBreakdown { get; set; } = new();
 }

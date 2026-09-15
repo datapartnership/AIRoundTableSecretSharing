@@ -48,7 +48,14 @@ public class KeyExchangeController : ControllerBase
     public async Task<ActionResult<MessageResponse>> RegisterPublicKey([FromBody] RegisterKeyRequest request)
     {
         // Identity comes from the token; body field is ignored
-        request.ProducerId = User.GetOid()!;
+        var producerId = User.GetOid();
+        if (string.IsNullOrWhiteSpace(producerId))
+            return Unauthorized();
+        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId))
+            return BadRequest("EpochId and DeviceId are required.");
+        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
+        if (epoch == null || !epoch.ProducerIds.Contains(producerId))
+            return Forbid();
 
         if (string.IsNullOrEmpty(request.PublicKeyBase64))
             return BadRequest("PublicKeyBase64 is required");
@@ -67,7 +74,7 @@ public class KeyExchangeController : ControllerBase
             return BadRequest("Invalid Base64 encoding for public key");
         }
 
-        var existing = await _keyRepo.GetKeyAsync(request.ProducerId);
+        var existing = await _keyRepo.GetKeyAsync(request.EpochId, producerId, request.DeviceId);
         if (existing != null && existing.PublicKeyBase64 != request.PublicKeyBase64)
         {
             return Conflict(new
@@ -78,17 +85,19 @@ public class KeyExchangeController : ControllerBase
 
         var partnerKey = new PartnerPublicKey
         {
-            ProducerId = request.ProducerId,
+            EpochId = request.EpochId,
+            ProducerId = producerId,
+            DeviceId = request.DeviceId,
             PublicKeyBase64 = request.PublicKeyBase64,
             RegisteredAt = DateTime.UtcNow
         };
 
         await _keyRepo.RegisterKeyAsync(partnerKey);
 
-        var allKeys = await _keyRepo.GetAllKeysAsync();
+        var allKeys = await _keyRepo.GetAllKeysAsync(request.EpochId);
         _logger.LogInformation(
-            "Registered public key for {ProducerId}. Key exchange possible with {Count} other partners.",
-            request.ProducerId,
+            "Registered public key for {ProducerId} in epoch {EpochId}. Key exchange possible with {Count} other partners.",
+            producerId, request.EpochId,
             allKeys.Count - 1);
 
         return Ok(new MessageResponse { Message = "Public key registered successfully" });
@@ -100,21 +109,24 @@ public class KeyExchangeController : ControllerBase
     /// </summary>
     [HttpGet("keys")]
     [ProducesResponseType(typeof(KeyExchangeResponse), 200)]
-    public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys([FromQuery] string? excludeProducerId = null)
+    public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys([FromQuery] int epochId, [FromQuery] string deviceId)
     {
-        var allKeys = await _keyRepo.GetAllKeysAsync();
-        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
-        var epochIds = epoch?.ProducerIds.ToHashSet() ?? [];
+        var callerId = User.GetOid();
+        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
+        if (callerId == null || epoch == null || !epoch.ProducerIds.Contains(callerId))
+            return Forbid();
+        var allKeys = await _keyRepo.GetAllKeysAsync(epochId);
+        var epochIds = epoch.ProducerIds.ToHashSet();
 
-        var keys = allKeys.Where(k => epochIds.Contains(k.ProducerId));
-        if (excludeProducerId != null)
-            keys = keys.Where(k => k.ProducerId != excludeProducerId);
+        var keys = allKeys.Where(k => epochIds.Contains(k.ProducerId) && k.ProducerId != callerId);
 
-        var partnerKeys = keys.ToList();
+        var partnerKeys = keys
+            .GroupBy(k => k.ProducerId)
+            .Select(g => g.OrderByDescending(k => k.RegisteredAt).First())
+            .ToList();
         _logger.LogInformation(
-            "Returning {Count} public keys (excluding: {Excluded})",
-            partnerKeys.Count,
-            excludeProducerId ?? "none");
+            "Returning {Count} public keys for epoch {EpochId} (excluding: {Excluded})",
+            partnerKeys.Count, epochId, callerId);
 
         return Ok(new KeyExchangeResponse
         {
@@ -131,7 +143,9 @@ public class KeyExchangeController : ControllerBase
     [ProducesResponseType(404)]
     public async Task<ActionResult<PartnerPublicKey>> GetPublicKey(string producerId)
     {
-        var key = await _keyRepo.GetKeyAsync(producerId);
+        var epochId = int.TryParse(Request.Query["epochId"], out var parsedEpochId) ? parsedEpochId : 0;
+        var deviceId = Request.Query["deviceId"].ToString();
+        var key = await _keyRepo.GetKeyAsync(epochId, producerId, deviceId);
 
         if (key == null)
         {
@@ -147,16 +161,20 @@ public class KeyExchangeController : ControllerBase
     /// </summary>
     [HttpGet("status")]
     [ProducesResponseType(typeof(KeyExchangeStatusResponse), 200)]
-    public async Task<ActionResult<KeyExchangeStatusResponse>> GetKeyExchangeStatus()
+    public async Task<ActionResult<KeyExchangeStatusResponse>> GetKeyExchangeStatus([FromQuery] int epochId, [FromQuery] string deviceId)
     {
-        var registeredKeys = await _keyRepo.GetAllKeysAsync();
-        var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
         var callerId = User.GetOid();
+        if (callerId == null || string.IsNullOrWhiteSpace(deviceId))
+            return Unauthorized();
+        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
+        if (epoch == null || !epoch.ProducerIds.Contains(callerId))
+            return Forbid();
+        var registeredKeys = await _keyRepo.GetAllKeysAsync(epochId);
+        var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
         var myKey = callerId != null
-            ? registeredKeys.FirstOrDefault(k => k.ProducerId == callerId)
+            ? registeredKeys.FirstOrDefault(k => k.ProducerId == callerId && k.DeviceId == deviceId)
             : null;
 
-        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
         var expectedPartners = epoch?.ProducerIds ?? [];
         var epochRegistered = expectedPartners.Where(p => registeredIds.Contains(p)).ToList();
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
@@ -164,10 +182,10 @@ public class KeyExchangeController : ControllerBase
         var n = expectedPartners.Count;
         var expectedCiphertexts = n * (n - 1) / 2;
         var actualCiphertexts = n > 0
-            ? await _ciphertextRepo.CountForPartnersAsync(expectedPartners)
+            ? await _ciphertextRepo.CountForPartnersAsync(epochId, expectedPartners)
             : 0;
         var postedSenders = n > 0
-            ? await _ciphertextRepo.GetSenderIdsForPartnersAsync(expectedPartners)
+            ? await _ciphertextRepo.GetSenderIdsForPartnersAsync(epochId, expectedPartners)
             : [];
         // Partners who must send at least one ciphertext: those who are NOT the alphabetical minimum
         var sortedPartners = expectedPartners.Order().ToList();

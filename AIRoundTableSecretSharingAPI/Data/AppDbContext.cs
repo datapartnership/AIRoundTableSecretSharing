@@ -63,20 +63,23 @@ public class AppDbContext : DbContext
             e.HasIndex(s => new { s.ProducerId, s.Country, s.Month, s.Indicator, s.Segment, s.EpochId }).IsUnique();
         });
 
-        // PartnerPublicKey — ProducerId is the natural key; upsert replaces on re-register
+        // Public keys are isolated by epoch and browser/device.
         modelBuilder.Entity<PartnerPublicKey>(e =>
         {
-            e.HasKey(k => k.ProducerId);
+            e.HasKey(k => new { k.EpochId, k.ProducerId, k.DeviceId });
             e.Property(k => k.ProducerId).HasMaxLength(100);
+            e.Property(k => k.DeviceId).HasMaxLength(100);
             e.Property(k => k.PublicKeyBase64).HasColumnType("nvarchar(max)");
         });
 
-        // PartnerCiphertext — composite PK (SenderId, RecipientId); upsert on re-run
+        // Ciphertexts are isolated by epoch and both participating devices.
         modelBuilder.Entity<PartnerCiphertext>(e =>
         {
-            e.HasKey(c => new { c.SenderId, c.RecipientId });
+            e.HasKey(c => new { c.EpochId, c.SenderId, c.SenderDeviceId, c.RecipientId, c.RecipientDeviceId });
             e.Property(c => c.SenderId).HasMaxLength(100);
+            e.Property(c => c.SenderDeviceId).HasMaxLength(100);
             e.Property(c => c.RecipientId).HasMaxLength(100);
+            e.Property(c => c.RecipientDeviceId).HasMaxLength(100);
             e.Property(c => c.CiphertextBase64).HasColumnType("nvarchar(max)");
         });
 

@@ -56,12 +56,40 @@ public class RegistryController : ControllerBase
             return NotFound("No epoch found for date");
 
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        epoch.IsEligible = User.GetOid() is { } oid && epoch.ProducerIds.Contains(oid);
 
         _logger.LogInformation(
             "Epoch requested for {Date}: Epoch {EpochId} with {Count} producers, closed={Closed}",
             effectiveDate, epoch.EpochId, epoch.ProducerCount, epoch.IsClosed);
 
         return Ok(epoch);
+    }
+
+    [HttpGet("epochs")]
+    [ProducesResponseType(typeof(EpochListResponse), 200)]
+    public async Task<ActionResult<EpochListResponse>> GetEpochsForPartner()
+    {
+        var producerId = User.GetOid();
+        if (producerId is null)
+            return Unauthorized();
+
+        var epochs = await _producerRepo.GetAllEpochsAsync();
+        return Ok(new EpochListResponse
+        {
+            Epochs = epochs
+                .Where(e => !e.IsClosed && (e.EndDate == null || e.EndDate > DateTime.UtcNow))
+                .Select(e => new EpochSummary
+                {
+                    EpochId = e.EpochId,
+                    StartDate = e.StartDate,
+                    EndDate = e.EndDate,
+                    ProducerCount = e.ProducerCount,
+                    IsClosed = e.IsClosed,
+                    ProducerIds = e.ProducerIds,
+                    IsEligible = e.ProducerIds.Contains(producerId)
+                })
+                .ToList()
+        });
     }
 
     [HttpPost("producers")]

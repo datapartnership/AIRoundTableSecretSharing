@@ -6,7 +6,9 @@ namespace AIRoundTableSecretSharingCommon.Models;
 /// </summary>
 public class PartnerPublicKey
 {
+    public int EpochId { get; set; }
     public string ProducerId { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
 
     /// <summary>
     /// The partner's ML-KEM-768 encapsulation key encoded as Base64 (1184 bytes).
@@ -22,7 +24,9 @@ public class PartnerPublicKey
 /// </summary>
 public class RegisterKeyRequest
 {
+    public int EpochId { get; set; }
     public string ProducerId { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
     public string PublicKeyBase64 { get; set; } = string.Empty;
 }
 
@@ -42,8 +46,11 @@ public class KeyExchangeResponse
 /// </summary>
 public class PartnerCiphertext
 {
+    public int EpochId { get; set; }
     public string SenderId { get; set; } = string.Empty;
+    public string SenderDeviceId { get; set; } = string.Empty;
     public string RecipientId { get; set; } = string.Empty;
+    public string RecipientDeviceId { get; set; } = string.Empty;
 
     /// <summary>
     /// ML-KEM-768 ciphertext encoded as Base64 (1088 bytes).
@@ -58,8 +65,11 @@ public class PartnerCiphertext
 /// </summary>
 public class StoreCiphertextRequest
 {
+    public int EpochId { get; set; }
+    public string DeviceId { get; set; } = string.Empty;
     public string SenderId { get; set; } = string.Empty;
     public string RecipientId { get; set; } = string.Empty;
+    public string RecipientDeviceId { get; set; } = string.Empty;
     public string CiphertextBase64 { get; set; } = string.Empty;
 }
 
