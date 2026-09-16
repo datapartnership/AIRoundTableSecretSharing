@@ -1,2 +1,8 @@
 VITE_API_URL=/
+# URL where your SPA is running (must match a registered redirect URI)
 VITE_REDIRECT_URL=http://localhost:3000
+# Default seeded SPA Application Client ID
+VITE_MSAL_CLIENT_ID=55555555-5555-5555-5555-555555555555
+# AvaEntra server origin + Tenant ID
+VITE_MSAL_AUTHORITY=http://localhost:5100/11111111-1111-1111-1111-111111111111
+VITE_MSAL_API_SCOPE=api://66666666-6666-6666-6666-666666666666/access_as_user
