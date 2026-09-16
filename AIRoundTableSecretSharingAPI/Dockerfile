@@ -4,11 +4,13 @@ EXPOSE 8080
 
 FROM node:20-alpine AS web-ui-build
 WORKDIR /src/web-ui
+ARG WEB_UI_ENV_FILE=web-ui/.env.production
 
 COPY ["web-ui/package.json", "web-ui/package-lock.json", "./"]
 RUN npm ci --registry=https://registry.npmjs.org/ && test -x node_modules/.bin/vite
 
-COPY ["web-ui/index.html", "web-ui/vite.config.js", "web-ui/.env.production", "./"]
+COPY ["web-ui/index.html", "web-ui/vite.config.js", "./"]
+COPY ${WEB_UI_ENV_FILE} ./.env.production
 COPY web-ui/public/ public/
 COPY web-ui/src/ src/
 RUN npm run build

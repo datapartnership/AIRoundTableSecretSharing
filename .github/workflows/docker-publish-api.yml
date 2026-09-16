@@ -68,7 +68,21 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ github.event.inputs.image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '' }}
 
-      - name: Build and push image
+      - name: Extract testing Docker metadata
+        id: meta-testing
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,suffix=-testing
+            type=ref,event=pr,suffix=-testing
+            type=semver,pattern={{version}}-testing
+            type=semver,pattern={{major}}.{{minor}}-testing
+            type=sha,suffix=-testing
+            type=raw,value=testing,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.image_tag }}-testing,enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '' }}
+
+      - name: Build and push production image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -76,5 +90,18 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push testing image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./AIRoundTableSecretSharingAPI/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-testing.outputs.tags }}
+          labels: ${{ steps.meta-testing.outputs.labels }}
+          build-args: |
+            WEB_UI_ENV_FILE=web-ui/.env.testing
           cache-from: type=gha
           cache-to: type=gha,mode=max
