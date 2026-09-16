@@ -3,6 +3,7 @@ using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
 using Scalar.AspNetCore;
@@ -44,6 +45,20 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddAuthentication()
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.Configure<JwtBearerOptions>(
+        JwtBearerDefaults.AuthenticationScheme,
+        options =>
+        {
+            options.BackchannelHttpHandler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+        });
+}
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
