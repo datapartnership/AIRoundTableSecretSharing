@@ -3,7 +3,6 @@ using AIRoundTableSecretSharingAPI.Data;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
 using Scalar.AspNetCore;
@@ -43,22 +42,24 @@ builder.Services.AddAuthorization(options =>
             builder.Configuration["AzureAd:AdminGroupId"]!));
 });
 
-builder.Services.AddAuthentication()
-    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+var azureAdConfiguration = builder.Configuration.GetSection("AzureAd");
 
-if (builder.Environment.IsDevelopment())
-{
-    builder.Services.Configure<JwtBearerOptions>(
-        JwtBearerDefaults.AuthenticationScheme,
-        options =>
+builder.Services.AddAuthentication()
+    .AddMicrosoftIdentityWebApi(
+        jwtBearerOptions =>
         {
-            options.BackchannelHttpHandler = new HttpClientHandler
+            azureAdConfiguration.Bind(jwtBearerOptions);
+
+            if (builder.Environment.IsDevelopment())
             {
-                ServerCertificateCustomValidationCallback =
-                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            };
-        });
-}
+                jwtBearerOptions.BackchannelHttpHandler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback =
+                        HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+            }
+        },
+        microsoftIdentityOptions => azureAdConfiguration.Bind(microsoftIdentityOptions));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
