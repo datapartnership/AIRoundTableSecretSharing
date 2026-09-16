@@ -67,7 +67,19 @@ builder.Services.AddAuthentication()
                 jwtBearerOptions.TokenValidationParameters.ValidIssuer =
                     $"{instance}/{tenantId}/v2.0";
                 jwtBearerOptions.TokenValidationParameters.IssuerValidator =
-                    Validators.ValidateIssuer;
+                    (issuer, _, validationParameters) =>
+                    {
+                        if (string.Equals(
+                                issuer,
+                                validationParameters.ValidIssuer,
+                                StringComparison.Ordinal))
+                        {
+                            return issuer;
+                        }
+
+                        throw new SecurityTokenInvalidIssuerException(
+                            $"Issuer '{issuer}' does not match the configured issuer.");
+                    };
             }
         },
         microsoftIdentityOptions => azureAdConfiguration.Bind(microsoftIdentityOptions));
