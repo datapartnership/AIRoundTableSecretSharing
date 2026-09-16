@@ -48,6 +48,16 @@ Query the aggregate for any country / month combination in the current epoch. Av
 
 MSAL v5 (`@azure/msal-browser` + `@azure/msal-react`) with interactive redirect flow. The access token is injected into every API request automatically. The `groups` claim in the token determines Admin vs Partner access.
 
+The web UI reads its Entra ID and group IDs from Vite environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `VITE_MSAL_CLIENT_ID` | SPA app registration client ID |
+| `VITE_MSAL_AUTHORITY` | Entra authority URL |
+| `VITE_MSAL_API_SCOPE` | API scope requested for access tokens |
+| `VITE_ADMIN_GROUP_ID` | Admin security group object ID used for Admin navigation gating |
+| `VITE_PARTNER_GROUP_ID` | Partner security group object ID, kept in sync with backend configuration |
+
 ## Project Structure
 
 ```

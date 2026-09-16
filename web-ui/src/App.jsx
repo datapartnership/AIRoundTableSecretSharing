@@ -7,8 +7,7 @@ import AdminPanel from './pages/AdminPanel'
 import { loginRequest, apiTokenRequest } from './authConfig'
 import { APP_VERSION } from './version'
 
-// Azure AD group IDs from appsettings.json
-const ADMIN_GROUP = '962dafa7-7ec1-43c3-bb67-235d64f9582f'
+const ADMIN_GROUP = import.meta.env.VITE_ADMIN_GROUP_ID
 
 // Groups claim is in the access token, not the ID token — parse it client-side for UI gating only
 function parseGroups(accessToken) {
@@ -28,6 +27,11 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated || !account) { setIsAdmin(false); return }
+    if (!ADMIN_GROUP) {
+      console.error('VITE_ADMIN_GROUP_ID is not configured; admin UI gating is disabled.')
+      setIsAdmin(false)
+      return
+    }
     instance.acquireTokenSilent({ ...apiTokenRequest, account })
       .then(r => setIsAdmin(parseGroups(r.accessToken).includes(ADMIN_GROUP)))
       .catch(() => setIsAdmin(false))

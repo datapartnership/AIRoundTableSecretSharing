@@ -371,6 +371,19 @@ In Azure App Service or Container Apps, add the same names as application
 settings/environment variables. Do not bake tenant-specific values or connection
 strings into the Docker image.
 
+The React web UI has its own build-time Vite environment variables for the
+same group IDs:
+
+| Purpose | Web UI environment variable |
+| --- | --- |
+| Admin group object ID | `VITE_ADMIN_GROUP_ID` |
+| Partner group object ID | `VITE_PARTNER_GROUP_ID` |
+
+Keep these values aligned with `AzureAd__AdminGroupId` and
+`AzureAd__PartnerGroupId` for the API. The API remains the authorization
+boundary; the web UI uses `VITE_ADMIN_GROUP_ID` only to hide or show admin
+navigation.
+
 The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everywhere — no per-client secrets or pre-seeded partner lists are required.
 
 ## 🚀 Getting Started
@@ -382,7 +395,7 @@ The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everyw
 - Access to an Azure SQL database (set `ConnectionStrings:DefaultConnection` in `appsettings.json` or `ConnectionStrings__DefaultConnection` as an environment variable)
 - An Azure Entra ID tenant with:
   - An API app registration (set as `AzureAd:ClientId` in `appsettings.json` or `AzureAd__ClientId` as an environment variable)
-  - A Web UI app registration (set in `web-ui/src/main.jsx`)
+  - A Web UI app registration (set as `VITE_MSAL_CLIENT_ID` in the web UI environment)
   - An admin security group and a partner security group
 
 ### Run the API
