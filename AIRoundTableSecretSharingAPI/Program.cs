@@ -16,11 +16,16 @@ builder.Services.AddControllers()
     });
 builder.Services.AddOpenApi();
 
+// CORS origins are configurable via "Cors:AllowedOrigins" (a comma-separated string),
+// which can be overridden with the Cors__AllowedOrigins environment variable.
+var corsOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "https://aiindexapi.azurewebsites.net")
+        policy.WithOrigins(corsOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
