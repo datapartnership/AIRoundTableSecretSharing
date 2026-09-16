@@ -5,6 +5,7 @@ using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
+using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -57,6 +58,16 @@ builder.Services.AddAuthentication()
                     ServerCertificateCustomValidationCallback =
                         HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
                 };
+
+                var instance = azureAdConfiguration["Instance"]?.TrimEnd('/')
+                    ?? throw new InvalidOperationException("AzureAd:Instance is required.");
+                var tenantId = azureAdConfiguration["TenantId"]
+                    ?? throw new InvalidOperationException("AzureAd:TenantId is required.");
+
+                jwtBearerOptions.TokenValidationParameters.ValidIssuer =
+                    $"{instance}/{tenantId}/v2.0";
+                jwtBearerOptions.TokenValidationParameters.IssuerValidator =
+                    Validators.ValidateIssuer;
             }
         },
         microsoftIdentityOptions => azureAdConfiguration.Bind(microsoftIdentityOptions));
