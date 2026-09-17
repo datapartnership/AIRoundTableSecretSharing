@@ -64,21 +64,27 @@ builder.Services.AddAuthentication()
                 var tenantId = azureAdConfiguration["TenantId"]
                     ?? throw new InvalidOperationException("AzureAd:TenantId is required.");
 
-                jwtBearerOptions.TokenValidationParameters.ValidIssuer =
-                    $"{instance}/{tenantId}/v2.0";
+                // Accept both the v2.0 issuer (login.microsoftonline.com/{tenant}/v2.0) and the
+                // v1.0 issuer (sts.windows.net/{tenant}/) — Entra ID issues the latter whenever the
+                // API app registration's "accessTokenAcceptedVersion" is 1 or unset, regardless of
+                // how the token was requested.
+                var validIssuers = new[]
+                {
+                    $"{instance}/{tenantId}/v2.0",
+                    $"https://sts.windows.net/{tenantId}/",
+                };
+
+                jwtBearerOptions.TokenValidationParameters.ValidIssuers = validIssuers;
                 jwtBearerOptions.TokenValidationParameters.IssuerValidator =
                     (issuer, _, validationParameters) =>
                     {
-                        if (string.Equals(
-                                issuer,
-                                validationParameters.ValidIssuer,
-                                StringComparison.Ordinal))
+                        if (validationParameters.ValidIssuers?.Contains(issuer, StringComparer.Ordinal) == true)
                         {
                             return issuer;
                         }
 
                         throw new SecurityTokenInvalidIssuerException(
-                            $"Issuer '{issuer}' does not match the configured issuer.");
+                            $"Issuer '{issuer}' does not match any configured issuer.");
                     };
             }
         },

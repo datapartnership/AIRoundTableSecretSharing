@@ -71,7 +71,13 @@ public class RegistryController : ControllerBase
     {
         var producerId = User.GetOid();
         if (producerId is null)
+        {
+            var claims = User.Claims.Select(c => $"{c.Type}={c.Value}");
+            _logger.LogWarning(
+                "Epoch list request rejected because the access token has no resolvable object ID. Claims present: {Claims}",
+                string.Join(", ", claims));
             return Unauthorized();
+        }
 
         var epochs = await _producerRepo.GetAllEpochsAsync();
         return Ok(new EpochListResponse
