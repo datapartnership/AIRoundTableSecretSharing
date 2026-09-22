@@ -5,6 +5,8 @@ namespace AIRoundTableSecretSharingAPI.Services;
 
 public static class EpochLifecycle
 {
+    public const int MinParticipants = 3;
+
     public static async Task CloseIfCompleteAsync(
         ProducerEpoch epoch,
         ISubmissionRepository submissions,

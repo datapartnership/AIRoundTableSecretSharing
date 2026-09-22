@@ -18,15 +18,18 @@ public class RegistryController : ControllerBase
 {
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<RegistryController> _logger;
 
     public RegistryController(
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
+        IConfiguration configuration,
         ILogger<RegistryController> logger)
     {
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -101,13 +104,31 @@ public class RegistryController : ControllerBase
     [HttpPost("producers")]
     [Authorize(Policy = "AdminOnly")]
     [ProducesResponseType(typeof(AddProducerResponse), 200)]
+    [ProducesResponseType(400)]
     [ProducesResponseType(403)]
     public async Task<ActionResult<AddProducerResponse>> AddProducer([FromBody] AddProducerRequest request)
     {
+        if (string.IsNullOrWhiteSpace(request.ProducerId))
+            return BadRequest(new { error = "producerId is required." });
+
+        if (request.ProducerId == User.GetOid())
+            return BadRequest(new { error = "Admins cannot be epoch participants." });
+
         var startDate = new DateTime(
             request.StartDate.Year,
             request.StartDate.Month,
             1).AddMonths(1);
+
+        var existingActive = await _producerRepo.GetActiveProducersAsync(startDate);
+        var resultingCount = existingActive.Count(p => p.ProducerId != request.ProducerId) + 1;
+        if (resultingCount < EpochLifecycle.MinParticipants)
+        {
+            return BadRequest(new
+            {
+                error = $"At least {EpochLifecycle.MinParticipants} producers are required to create an epoch.",
+                producerCount = resultingCount
+            });
+        }
 
         var producer = new ProducerInfo
         {
@@ -142,6 +163,7 @@ public class RegistryController : ControllerBase
 
     [HttpPost("producers/me")]
     [ProducesResponseType(200)]
+    [ProducesResponseType(403)]
     public async Task<IActionResult> SelfRegister()
     {
         // Azure AD OID claim — name varies depending on MapInboundClaims setting
@@ -152,6 +174,13 @@ public class RegistryController : ControllerBase
             var allClaims = User.Claims.Select(c => $"{c.Type}={c.Value}").ToList();
             _logger.LogError("SelfRegister: could not resolve producerId. Claims present: {Claims}", string.Join(", ", allClaims));
             return BadRequest(new { error = "Unable to resolve user identity from token.", claims = allClaims });
+        }
+
+        if (User.IsAdmin(_configuration))
+        {
+            await _producerRepo.DeactivateProducerAsync(producerId);
+            _logger.LogWarning("SelfRegister rejected for admin {ProducerId}", producerId);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Admins cannot register as participants." });
         }
 
         var displayName = User.FindFirstValue("name")

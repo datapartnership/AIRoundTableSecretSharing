@@ -70,8 +70,8 @@ public class AdminController : ControllerBase
     [ProducesResponseType(400)]
     public async Task<ActionResult<ReplaceProducersResponse>> ResetAndCreateEpoch([FromBody] ReplaceProducersRequest request)
     {
-        if (request.Producers == null || request.Producers.Count < 2)
-            return BadRequest(new { error = "At least 2 producers are required." });
+        if (request.Producers == null || request.Producers.Count < EpochLifecycle.MinParticipants)
+            return BadRequest(new { error = $"At least {EpochLifecycle.MinParticipants} producers are required." });
 
         if (!TryResolveEpochStartDate(request.StartMonth, out var startDate))
             return BadRequest(new { error = "startMonth must be in YYYY-MM format (e.g. 2025-01)." });
@@ -96,6 +96,26 @@ public class AdminController : ControllerBase
 
         if (duplicateIds.Count > 0)
             return BadRequest(new { error = "Duplicate producerId values are not allowed.", duplicateProducerIds = duplicateIds });
+
+        var callerId = User.GetOid();
+        if (callerId != null && normalizedProducers.Any(p => p.ProducerId == callerId))
+            return BadRequest(new { error = "Admins cannot be epoch participants." });
+
+        // Admins are refused at self-registration, so requiring an active registration excludes them
+        var requestedIds = normalizedProducers.Select(p => p.ProducerId).ToList();
+        var activeIds = (await _producerRepo.GetProducersByIdsAsync(requestedIds))
+            .Where(p => p.IsActive)
+            .Select(p => p.ProducerId)
+            .ToHashSet(StringComparer.Ordinal);
+        var unregisteredIds = requestedIds.Where(id => !activeIds.Contains(id)).OrderBy(id => id).ToList();
+        if (unregisteredIds.Count > 0)
+        {
+            return BadRequest(new
+            {
+                error = "Every producer must be an active registered partner.",
+                unregisteredProducerIds = unregisteredIds
+            });
+        }
 
         _logger.LogWarning(
             "Admin producer replacement initiated by {User}. New producer count: {Count}",

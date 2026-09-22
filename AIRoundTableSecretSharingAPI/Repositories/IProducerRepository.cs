@@ -10,6 +10,7 @@ public interface IProducerRepository
     Task<List<ProducerEpoch>> GetAllEpochsAsync();
     Task AddProducerAsync(ProducerInfo producer);
     Task UpsertProducerAsync(ProducerInfo producer);
+    Task DeactivateProducerAsync(string producerId);
     Task<List<ProducerInfo>> GetProducersByIdsAsync(IReadOnlyCollection<string> ids);
     Task CreateEpochAsync(ProducerEpoch epoch);
     Task AddEpochAsync(ProducerEpoch epoch);

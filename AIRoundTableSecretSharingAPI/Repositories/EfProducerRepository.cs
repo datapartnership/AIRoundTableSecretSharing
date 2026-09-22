@@ -57,6 +57,16 @@ public class EfProducerRepository : IProducerRepository
         await _db.SaveChangesAsync();
     }
 
+    public async Task DeactivateProducerAsync(string producerId)
+    {
+        var existing = await _db.Producers.FindAsync(producerId);
+        if (existing is null || !existing.IsActive)
+            return;
+
+        existing.IsActive = false;
+        await _db.SaveChangesAsync();
+    }
+
     public async Task CreateEpochAsync(ProducerEpoch epoch)
     {
         var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(e => e.EndDate == null);

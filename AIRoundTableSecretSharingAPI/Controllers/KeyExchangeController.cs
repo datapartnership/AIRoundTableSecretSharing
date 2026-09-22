@@ -42,6 +42,7 @@ public class KeyExchangeController : ControllerBase
     /// This is called once when a partner joins the system.
     /// </summary>
     [HttpPost("register")]
+    [Authorize(Policy = "Participant")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(409)]

@@ -34,6 +34,7 @@ public class CiphertextController : ControllerBase
     /// Store a KEM ciphertext. Called by the alphabetically larger partner after encapsulation.
     /// </summary>
     [HttpPost]
+    [Authorize(Policy = "Participant")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(409)]

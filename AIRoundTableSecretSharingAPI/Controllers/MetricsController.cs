@@ -38,6 +38,7 @@ public class MetricsController : ControllerBase
     }
 
     [HttpPost("submit")]
+    [Authorize(Policy = "Participant")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(409)]
@@ -85,6 +86,7 @@ public class MetricsController : ControllerBase
     }
 
     [HttpPost("submit-batch")]
+    [Authorize(Policy = "Participant")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(409)]

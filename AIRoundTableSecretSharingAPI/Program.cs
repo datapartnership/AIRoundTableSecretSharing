@@ -41,6 +41,11 @@ builder.Services.AddAuthorization(options =>
         policy.RequireClaim("groups",
             builder.Configuration["AzureAd:PartnerGroupId"]!,
             builder.Configuration["AzureAd:AdminGroupId"]!));
+    // Admins may observe but never contribute keys, ciphertexts or metrics
+    options.AddPolicy("Participant", policy =>
+        policy.RequireAssertion(ctx =>
+            ctx.User.HasClaim("groups", builder.Configuration["AzureAd:PartnerGroupId"]!) &&
+            !ctx.User.HasClaim("groups", builder.Configuration["AzureAd:AdminGroupId"]!)));
 });
 
 var azureAdConfiguration = builder.Configuration.GetSection("AzureAd");

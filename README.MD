@@ -307,16 +307,17 @@ All endpoints require a valid Azure Entra ID Bearer token. The caller's producer
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/registry/producers` | GET | Partner | List all registered producers |
-| `/registry/producers/me` | POST | Partner | Self-register (upsert) on first login |
+| `/registry/producers/me` | POST | Partner (403 for admins) | Self-register (upsert) on first login |
 | `/registry/epoch` | GET | Partner | Get current epoch |
-| `/keyexchange/register` | POST | Partner | Register ML-KEM-768 encapsulation key |
+| `/keyexchange/register` | POST | Participant | Register ML-KEM-768 encapsulation key |
 | `/keyexchange/keys` | GET | Partner | All partners' encapsulation keys |
 | `/keyexchange/status` | GET | Partner | Key registration status for current epoch |
-| `/ciphertext` | POST | Partner | Store a KEM ciphertext (sender → recipient) |
+| `/ciphertext` | POST | Participant | Store a KEM ciphertext (sender → recipient) |
 | `/ciphertext` | GET | Partner | Fetch ciphertexts addressed to the caller |
-| `/metrics/submit` | POST | Partner | Submit a masked metric value |
-| `/metrics/aggregate` | GET | Partner | Get aggregate for a country / month |
-| `/admin/producers/reset-and-create-epoch` | POST | Admin | Select partners and open a new epoch |
+| `/metrics/submit` | POST | Participant | Submit a masked metric value |
+| `/metrics/submit-batch` | POST | Participant | Submit a batch of masked metric values |
+| `/metrics/aggregate` | GET | Admin | Get aggregate for a country / month |
+| `/admin/producers/reset-and-create-epoch` | POST | Admin | Select at least 3 registered partners and open a new epoch |
 | `/admin/reset` | POST | Admin | Clear all data |
 
 ### Authentication — Azure Entra ID (Microsoft Identity Platform)
@@ -325,8 +326,11 @@ All endpoints are protected by `AddMicrosoftIdentityWebApi`. Clients obtain a Be
 
 Authorization policies are enforced via group membership embedded in the access token:
 
-- **Partner** policy — caller must be a member of the `PartnerGroupId` group
+- **Partner** policy — caller must be a member of the `PartnerGroupId` or `AdminGroupId` group (read access)
+- **Participant** policy — caller must be a member of `PartnerGroupId` and **not** of `AdminGroupId`; required for key registration, ciphertext posting and metric submission
 - **Admin** policy — caller must be a member of the `AdminGroupId` group
+
+Admins cannot self-register, be selected into an epoch, or contribute data. Every epoch needs at least 3 registered participants.
 
 ```json
 // appsettings.json
