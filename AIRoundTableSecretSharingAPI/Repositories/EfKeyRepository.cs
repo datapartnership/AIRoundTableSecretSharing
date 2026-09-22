@@ -25,6 +25,19 @@ public class EfKeyRepository : IKeyRepository
         await _db.SaveChangesAsync();
     }
 
+    public async Task ReplaceProducerKeyAsync(PartnerPublicKey key)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        var old = await _db.PublicKeys
+            .Where(k => k.EpochId == key.EpochId && k.ProducerId == key.ProducerId)
+            .ToListAsync();
+        _db.PublicKeys.RemoveRange(old);
+        await _db.SaveChangesAsync();
+        _db.PublicKeys.Add(key);
+        await _db.SaveChangesAsync();
+        await tx.CommitAsync();
+    }
+
     public Task<PartnerPublicKey?> GetKeyAsync(int epochId, string producerId, string deviceId) =>
         _db.PublicKeys.FindAsync(epochId, producerId, deviceId).AsTask();
 

@@ -23,18 +23,40 @@ public class KeyExchangeController : ControllerBase
     private readonly IKeyRepository _keyRepo;
     private readonly IProducerRepository _producerRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
+    private readonly ISubmissionRepository _submissionRepo;
     private readonly ILogger<KeyExchangeController> _logger;
 
     public KeyExchangeController(
         IKeyRepository keyRepo,
         IProducerRepository producerRepo,
         ICiphertextRepository ciphertextRepo,
+        ISubmissionRepository submissionRepo,
         ILogger<KeyExchangeController> logger)
     {
         _keyRepo = keyRepo;
         _producerRepo = producerRepo;
         _ciphertextRepo = ciphertextRepo;
+        _submissionRepo = submissionRepo;
         _logger = logger;
+    }
+
+    private static string? ValidatePublicKey(string? publicKeyBase64)
+    {
+        if (string.IsNullOrEmpty(publicKeyBase64))
+            return "PublicKeyBase64 is required";
+
+        // ML-KEM-768 encapsulation keys are exactly 1184 bytes
+        try
+        {
+            var keyBytes = Convert.FromBase64String(publicKeyBase64);
+            if (keyBytes.Length != 1184)
+                return $"Invalid public key length ({keyBytes.Length}); expected 1184 bytes for ML-KEM-768.";
+        }
+        catch (FormatException)
+        {
+            return "Invalid Base64 encoding for public key";
+        }
+        return null;
     }
 
     /// <summary>
@@ -58,22 +80,9 @@ public class KeyExchangeController : ControllerBase
         if (epoch == null || !epoch.ProducerIds.Contains(producerId))
             return Forbid();
 
-        if (string.IsNullOrEmpty(request.PublicKeyBase64))
-            return BadRequest("PublicKeyBase64 is required");
-
-        // Validate the public key format — ML-KEM-768 encapsulation keys are exactly 1184 bytes
-        try
-        {
-            var keyBytes = Convert.FromBase64String(request.PublicKeyBase64);
-            if (keyBytes.Length != 1184)
-            {
-                return BadRequest($"Invalid public key length ({keyBytes.Length}); expected 1184 bytes for ML-KEM-768.");
-            }
-        }
-        catch (FormatException)
-        {
-            return BadRequest("Invalid Base64 encoding for public key");
-        }
+        var keyError = ValidatePublicKey(request.PublicKeyBase64);
+        if (keyError != null)
+            return BadRequest(keyError);
 
         var existing = await _keyRepo.GetKeyAsync(request.EpochId, producerId, request.DeviceId);
         if (existing != null && existing.PublicKeyBase64 != request.PublicKeyBase64)
@@ -102,6 +111,58 @@ public class KeyExchangeController : ControllerBase
             allKeys.Count - 1);
 
         return Ok(new MessageResponse { Message = "Public key registered successfully" });
+    }
+
+    /// <summary>
+    /// Replace the caller's key for an epoch (on any device) with a new one.
+    /// Only allowed while no ciphertext or submission in the epoch depends on the old key.
+    /// </summary>
+    [HttpPost("rotate")]
+    [Authorize(Policy = "Participant")]
+    [ProducesResponseType(typeof(MessageResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
+    public async Task<ActionResult<MessageResponse>> RotatePublicKey([FromBody] RegisterKeyRequest request)
+    {
+        var producerId = User.GetOid();
+        if (string.IsNullOrWhiteSpace(producerId))
+            return Unauthorized();
+        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId))
+            return BadRequest("EpochId and DeviceId are required.");
+        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
+        if (epoch == null || !epoch.ProducerIds.Contains(producerId))
+            return Forbid();
+
+        var keyError = ValidatePublicKey(request.PublicKeyBase64);
+        if (keyError != null)
+            return BadRequest(keyError);
+
+        var hasCiphertexts = await _ciphertextRepo.AnyInvolvingAsync(request.EpochId, producerId);
+        var hasSubmissions = !hasCiphertexts
+            && (await _submissionRepo.GetSubmissionsByEpochAsync(request.EpochId)).Count > 0;
+        if (hasCiphertexts || hasSubmissions)
+        {
+            return Conflict(new
+            {
+                error = "The key exchange has already started, so your key can't be replaced. Ask an admin to recreate the epoch.",
+                code = "exchange-started"
+            });
+        }
+
+        await _keyRepo.ReplaceProducerKeyAsync(new PartnerPublicKey
+        {
+            EpochId = request.EpochId,
+            ProducerId = producerId,
+            DeviceId = request.DeviceId,
+            PublicKeyBase64 = request.PublicKeyBase64,
+            RegisteredAt = DateTime.UtcNow
+        });
+
+        _logger.LogWarning(
+            "Rotated public key for {ProducerId} in epoch {EpochId} (device {DeviceId}).",
+            producerId, request.EpochId, request.DeviceId);
+
+        return Ok(new MessageResponse { Message = "Public key replaced successfully" });
     }
 
     /// <summary>

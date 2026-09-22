@@ -57,6 +57,10 @@ public class EfCiphertextRepository : ICiphertextRepository
             .Distinct()
             .ToListAsync();
 
+    public Task<bool> AnyInvolvingAsync(int epochId, string producerId) =>
+        _db.Ciphertexts.AnyAsync(c => c.EpochId == epochId
+            && (c.SenderId == producerId || c.RecipientId == producerId));
+
     public async Task ClearAsync(int? epochId = null)
     {
         var ciphertexts = epochId.HasValue
