@@ -124,7 +124,8 @@ app.UseDefaultFiles(new DefaultFilesOptions
     DefaultFileNames = new List<string> { "index.html" }
 });
 
-app.UseStaticFiles();
+//let's no longer serve the UI from here
+//app.UseStaticFiles();
 
 app.UseCors();
 app.UseAuthentication();
