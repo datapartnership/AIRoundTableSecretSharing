@@ -1,0 +1,56 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+ branches:
+   include:
+     - QA
+ paths:
+   exclude:
+     - Azure-Pipelines/*
+
+name: $(AppName)_Build_$(MajorReleaseNumber).$(MinorReleaseNumber).$(FixNumber).$(Build.BuildId)
+variables:
+- group: YAML-DOTNET-VSBUILD-VG
+- group: GenAIAdoptionIndex-API-QA-VG
+stages:
+ - stage: CIBuild
+   jobs:
+   - job: Phase_1
+     displayName: Agent job 1
+     cancelTimeoutInMinutes: 1
+     pool:
+      name: $(AgentPoolCI)
+      demands:
+        - agent.computerName -equals WBGMSTFA1001
+     steps:
+     - script: echo "name is $(Build.SourceBranchName)"
+     - task: CopyFiles@2
+       inputs:
+        SourceFolder: $(OISScriptFolder)
+        Contents: 'nuget.config'
+        TargetFolder: '$(build.sourcesdirectory)\$(NugetConfigTargetPath)'
+        OverWrite: true
+     - task: NuGetToolInstaller@0
+       displayName: Use NuGet $(NugetVersion)
+       inputs:
+        versionSpec: '$(NugetVersion)'
+     - task: NuGetCommand@2
+       displayName: NuGet restore
+       inputs:
+        command: 'restore'
+        restoreSolution: '$(SolutionFileName).sln'
+        feedsToUse: 'config'
+        nugetConfigPath: '$(NugetConfigPath)'
+     - task: VSBuild@1
+       displayName: BUILD SOLUTION
+       inputs:
+        solution: '$(SolutionFileName).sln'
+        msbuildArgs: /p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=false /p:PackageLocation="$(build.artifactstagingdirectory)\\"
+     - task: PublishBuildArtifacts@1
+       displayName: PUBLISH ARTIFACTS
+       inputs:
+        PathtoPublish: $(build.artifactstagingdirectory)
+        TargetPath: '\\my\share\$(Build.DefinitionName)\$(Build.BuildNumber)'
