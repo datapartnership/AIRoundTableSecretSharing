@@ -6,7 +6,7 @@
 trigger:
  branches:
    include:
-     - QA
+     - qa
  paths:
    exclude:
      - Azure-Pipelines/*
