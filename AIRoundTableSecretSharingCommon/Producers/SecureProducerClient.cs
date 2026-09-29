@@ -286,16 +286,16 @@ public class SecureProducerClient : IDisposable
             var noise = SecureNoiseGenerator.GenerateNoise(
                 sharedSecret, country, monthStart.ToString("yyyy-MM"), indicator, segment);
             var sign = SecureNoiseGenerator.GetNoiseSign(_producerId, otherProducerId);
-            var appliedNoise = noise * sign;
+            var appliedNoise = unchecked(noise * sign);
 
-            maskedMAU += appliedNoise;
+            maskedMAU = SecureNoiseGenerator.ApplyNoise(maskedMAU, noise, sign);
             noiseBreakdown[otherProducerId] = appliedNoise;
 
             Console.WriteLine($"    With {otherProducerId}: {appliedNoise:+#,0;-#,0}");
         }
 
         Console.WriteLine($"    ─────────────────────────────────────────");
-        Console.WriteLine($"    Total noise: {(maskedMAU - actualValue):+#,0;-#,0}");
+        Console.WriteLine($"    Total noise: {unchecked(maskedMAU - actualValue):+#,0;-#,0}");
         Console.WriteLine($"    Masked MAU:  {maskedMAU:N0}");
         Console.WriteLine();
 
@@ -339,7 +339,7 @@ public class SecureProducerClient : IDisposable
             Message = "Submitted securely",
             OriginalValue = actualValue,
             MaskedValue = maskedMAU,
-            NoiseApplied = maskedMAU - actualValue,
+            NoiseApplied = unchecked(maskedMAU - actualValue),
             NoiseBreakdown = noiseBreakdown
         };
     }

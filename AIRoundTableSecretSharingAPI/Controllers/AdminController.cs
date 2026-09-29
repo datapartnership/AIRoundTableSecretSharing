@@ -1,6 +1,7 @@
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Data;
+using AIRoundTableSecretSharingCommon.Core;
 using AIRoundTableSecretSharingCommon.Models;
 using AIRoundTableSecretSharingAPI.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -313,7 +314,7 @@ public class AdminController : ControllerBase
                             Month = month,
                             Indicator = indicator,
                             Segment = segment,
-                            Total = cell.Sum(s => s.Value).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            Total = SecureNoiseGenerator.SumMasked(cell.Select(s => s.Value)).ToString(System.Globalization.CultureInfo.InvariantCulture),
                             SubmissionCount = cell.Count,
                             ExpectedSubmissions = epoch.ProducerCount,
                             MissingProducers = new List<string>()

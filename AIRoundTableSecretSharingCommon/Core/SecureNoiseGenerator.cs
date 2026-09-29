@@ -14,14 +14,15 @@ public static class SecureNoiseGenerator
     /// Generates noise using the shared secret between two partners.
     /// Both partners will independently compute the SAME noise value.
     /// The aggregator CANNOT compute this because it doesn't know the shared secret.
+    /// Noise spans the full int64 range; masking and aggregation use wrap-around
+    /// (mod 2^64) arithmetic, so a masked value reveals nothing about the actual one.
     /// </summary>
     public static long GenerateNoise(
         byte[] sharedSecret,
         string country,
         string month,
         string indicator,
-        string segment,
-        long maxNoise = 100_000_000)
+        string segment)
     {
         var contextString = $"{country}|{month}|{indicator}|{segment}";
         var contextBytes = Encoding.UTF8.GetBytes(contextString);
@@ -30,12 +31,25 @@ public static class SecureNoiseGenerator
         var hash = hmac.ComputeHash(contextBytes);
 
         // Signed little-endian int64 from first 8 bytes — matches JS/Python
-        // struct.unpack("<q", h[:8])[0]. Use Python-style modulo (always
-        // non-negative) so both runtimes produce identical noise values.
-        var seed = BitConverter.ToInt64(hash, 0);
-        var noiseRange = 2 * maxNoise + 1;
-        var mod = ((seed % noiseRange) + noiseRange) % noiseRange;
-        return mod - maxNoise;
+        // struct.unpack("<q", h[:8])[0].
+        return BitConverter.ToInt64(hash, 0);
+    }
+
+    /// <summary>
+    /// Applies signed noise to a value with wrap-around (mod 2^64) arithmetic.
+    /// </summary>
+    public static long ApplyNoise(long value, long noise, int sign) =>
+        unchecked(value + noise * sign);
+
+    /// <summary>
+    /// Sums masked values with wrap-around (mod 2^64) arithmetic. Pairwise noise
+    /// cancels exactly, so the result is the true total whenever it fits in int64.
+    /// </summary>
+    public static long SumMasked(IEnumerable<long> values)
+    {
+        long total = 0;
+        foreach (var v in values) total = unchecked(total + v);
+        return total;
     }
 
     /// <summary>

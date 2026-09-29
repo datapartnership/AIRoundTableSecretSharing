@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
+using AIRoundTableSecretSharingCommon.Core;
 using AIRoundTableSecretSharingCommon.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -258,7 +259,7 @@ public class MetricsController : ControllerBase
             });
         }
 
-        long total = submissions.Sum(s => s.Value);
+        long total = SecureNoiseGenerator.SumMasked(submissions.Select(s => s.Value));
 
         _logger.LogInformation(
             "AGGREGATION COMPLETE for {Country}/{Month}/{Indicator}/{Segment}: Total = {Total:N0} (noise canceled!)",

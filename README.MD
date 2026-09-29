@@ -41,7 +41,7 @@ ML-KEM (Module Lattice-based Key Encapsulation Mechanism, standardised as FIPS 2
 │  Aggregator stores: pk_A, pk_B, ciphertext_BA (all opaque blobs)            │
 │  Aggregator CANNOT recover: secret_AB (KEM security, IND-CCA2)              │
 │                                                                              │
-│  Noise = HMAC-SHA256(secret_AB, country || month)                           │
+│  Noise = HMAC-SHA256(secret_AB, country|month|indicator|segment)[0..8]      │
 │  → Only the two partners can compute this, not the aggregator!              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -97,29 +97,27 @@ byte[] secret_AC = myKem.Decapsulate(ciphertext_CA);
 
 #### Phase 4: Generate Noise and Submit
 
-Noise is derived using HMAC-SHA256 with the shared secret as the key. The sign depends on alphabetical order — the smaller partner adds, the larger subtracts:
+Noise is derived per cell (country, month, indicator, segment) using HMAC-SHA256 with the shared secret as the key. The noise is the full signed 64-bit integer from the first 8 bytes of the HMAC, and all masking is done with wrap-around (mod 2^64) arithmetic. The sign depends on alphabetical order — the smaller partner adds, the larger subtracts:
 
 ```csharp
 // SecureNoiseGenerator.cs
 var hmac   = new HMACSHA256(sharedSecret);
-var hash   = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month:yyyy-MM}"));
-var seed   = BitConverter.ToInt64(hash, 0);         // first 8 bytes as LE signed int64
-var range  = 2 * maxNoise + 1;
-var noise  = ((seed % range) + range) % range - maxNoise;  // Python-compatible modulo
+var hash   = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}"));
+var noise  = BitConverter.ToInt64(hash, 0);         // first 8 bytes as LE signed int64
 
 int sign = (myId < otherId) ? +1 : -1;   // smaller partner adds, larger subtracts
 
-maskedMAU = actualMAU + Σ(noise × sign)
+maskedValue = unchecked(actualValue + Σ(noise × sign))   // mod 2^64
 ```
 
-The aggregator receives only `maskedMAU` — it cannot reproduce the noise without the shared secrets.
+The aggregator receives only `maskedValue`. Because the noise is uniform over the whole int64 range, each masked value is itself uniformly random and reveals nothing about the actual value; the aggregator cannot reproduce the noise without the shared secrets.
 
 #### Aggregation
 
-The aggregator sums all masked values. The noise cancels perfectly, leaving the true total:
+The aggregator sums all masked values with the same wrap-around arithmetic (`SecureNoiseGenerator.SumMasked`). The noise cancels exactly mod 2^64, leaving the true total as long as it fits in a signed int64:
 
 ```
-Σ(maskedMAU) = Σ(actualMAU) + 0 = TotalMAU ✓
+Σ(maskedValue) mod 2^64 = Σ(actualValue) + 0 = Total ✓
 ```
 
 ### Mathematical Proof (3 Partners)
@@ -182,7 +180,7 @@ AIRoundTableSecretSharing/
 ├── AIRoundTableSecretSharingCommon/       # Shared library
 │   ├── Core/
 │   │   ├── MlKemKeyExchange.cs            # ML-KEM-768 key gen, encapsulate, decapsulate
-│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 noise; Python-compatible
+│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 full-width noise (mod 2^64)
 │   │   └── DeterministicNoiseGenerator.cs # Hash-based noise (legacy console demo)
 │   ├── Models/                            # Shared DTOs (MetricSubmission, ProducerInfo, …)
 │   └── Producers/
@@ -244,18 +242,19 @@ public class MlKemKeyExchange : IDisposable
 
 ### SecureNoiseGenerator.cs
 
-Derives pairwise noise from a shared secret using HMAC-SHA256 — unchanged from ECDH version, since the noise generation only depends on having a shared secret:
+Derives full-width pairwise noise from a shared secret using HMAC-SHA256, and provides wrap-around helpers for masking and aggregation:
 
 ```csharp
-public static long GenerateNoise(byte[] sharedSecret, string country, DateTime month,
-                                  long maxNoise = 100_000_000)
+public static long GenerateNoise(byte[] sharedSecret, string country, string month,
+                                  string indicator, string segment)
 {
-    var context = $"{country}|{month:yyyy-MM}";
     using var hmac = new HMACSHA256(sharedSecret);
-    var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(context));
-    var seed = BitConverter.ToInt64(hash, 0);
-    return new Random((int)(seed & 0x7FFFFFFF)).NextInt64(-maxNoise, maxNoise + 1);
+    var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}"));
+    return BitConverter.ToInt64(hash, 0);
 }
+
+public static long ApplyNoise(long value, long noise, int sign) => unchecked(value + noise * sign);
+public static long SumMasked(IEnumerable<long> values) { /* unchecked running sum */ }
 
 // Smaller partner (alphabetically) adds; larger subtracts → noise cancels in the sum
 public static int GetNoiseSign(string myId, string otherId)
