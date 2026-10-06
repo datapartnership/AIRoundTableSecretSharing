@@ -22,4 +22,20 @@ public static class EpochLifecycle
         await producers.CloseEpochAsync(epoch.EpochId);
         epoch.IsClosed = true;
     }
+
+    public static async Task CompleteQuorumIfAnsweredAsync(
+        ProducerEpoch epoch,
+        IQuorumRepository quorum,
+        IProducerRepository producers)
+    {
+        if (epoch.QuorumComplete)
+            return;
+
+        var responses = await quorum.GetByEpochAsync(epoch.EpochId);
+        if (!QuorumGrid.IsComplete(epoch, responses))
+            return;
+
+        await producers.MarkQuorumCompleteAsync(epoch.EpochId);
+        epoch.QuorumComplete = true;
+    }
 }

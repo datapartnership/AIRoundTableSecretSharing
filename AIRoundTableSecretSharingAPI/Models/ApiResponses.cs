@@ -85,6 +85,8 @@ public class EpochSummary
     public DateTime? EndDate { get; set; }
     public int ProducerCount { get; set; }
     public bool IsClosed { get; set; }
+    public bool QuorumComplete { get; set; }
+    public string Phase => IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<string> ProducerIds { get; set; } = new();
     public bool IsEligible { get; set; }
     public bool CanParticipate => IsEligible && !IsClosed;
@@ -116,7 +118,53 @@ public class EpochDetailResponse
     public DateTime? EndDate { get; set; }
     public int PartnerCount { get; set; }
     public bool IsClosed { get; set; }
+    public bool QuorumComplete { get; set; }
+    public string Phase => IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<EpochPartnerInfo> Partners { get; set; } = new();
+    public List<QuorumPartnerStatus> QuorumPartners { get; set; } = new();
+    public List<QuorumCellInfo> QuorumCells { get; set; } = new();
     public List<MissingProducerStatus> MissingProducers { get; set; } = new();
     public List<AggregationResult> Aggregates { get; set; } = new();
+}
+
+
+public class QuorumPartnerStatus
+{
+    public string ProducerId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public int AnsweredCells { get; set; }
+    public bool Done { get; set; }
+}
+
+public class QuorumCellInfo
+{
+    public string Country { get; set; } = string.Empty;
+    public string Month { get; set; } = string.Empty;
+    public string Indicator { get; set; } = string.Empty;
+    public string Segment { get; set; } = string.Empty;
+    public int ParticipantCount { get; set; }
+    public bool Ignored { get; set; }
+    public string Signature { get; set; } = string.Empty;
+    public List<EpochPartnerInfo> Participants { get; set; } = new();
+}
+
+/// <summary>Partner-facing quorum state: no composition, only counts and the caller's own answers.</summary>
+public class QuorumStatusResponse
+{
+    public int EpochId { get; set; }
+    public bool QuorumComplete { get; set; }
+    public bool MyDone { get; set; }
+    public int AnsweredPartners { get; set; }
+    public int PartnerCount { get; set; }
+    public List<QuorumMyCell> Cells { get; set; } = new();
+}
+
+public class QuorumMyCell
+{
+    public string Country { get; set; } = string.Empty;
+    public string Month { get; set; } = string.Empty;
+    public string Indicator { get; set; } = string.Empty;
+    public string Segment { get; set; } = string.Empty;
+    public bool Participates { get; set; }
+    public bool Ignored { get; set; }
 }

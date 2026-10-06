@@ -100,6 +100,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<IProducerRepository, EfProducerRepository>();
 builder.Services.AddScoped<ISubmissionRepository, EfSubmissionRepository>();
+builder.Services.AddScoped<IQuorumRepository, EfQuorumRepository>();
 builder.Services.AddScoped<IKeyRepository, EfKeyRepository>();
 builder.Services.AddScoped<ICiphertextRepository, EfCiphertextRepository>();
 builder.Services.AddScoped<IClientCredentialService, DbClientCredentialService>();

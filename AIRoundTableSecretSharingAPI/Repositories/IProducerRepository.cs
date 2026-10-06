@@ -15,6 +15,7 @@ public interface IProducerRepository
     Task CreateEpochAsync(ProducerEpoch epoch);
     Task AddEpochAsync(ProducerEpoch epoch);
     Task CloseEpochAsync(int epochId);
+    Task MarkQuorumCompleteAsync(int epochId);
 
     Task ClearAllAsync();
 }

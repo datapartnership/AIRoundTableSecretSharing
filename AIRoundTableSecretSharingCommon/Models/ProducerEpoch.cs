@@ -11,6 +11,8 @@ public class ProducerEpoch
     public int ProducerCount { get; set; }
     /// <summary>True once every producer has submitted every required country/month cell.</summary>
     public bool IsClosed { get; set; }
+    /// <summary>False while the epoch is in its Quorum Check phase; true once every partner answered.</summary>
+    public bool QuorumComplete { get; set; }
     [NotMapped]
     public bool IsEligible { get; set; }
     [NotMapped]

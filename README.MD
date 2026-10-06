@@ -152,6 +152,18 @@ Let:
 
 The aggregator learns only the total (1,700,000) but **cannot determine** any individual partner's MAU value.
 
+## 🗳️ Quorum Check
+
+Every new epoch starts in a **Quorum Check** phase, before key exchange and submission. Each partner uploads the
+same CSV format with `value` = `1` (participate) or `0` (do not participate) for every metric cell. Answers are plain
+(unmasked) and final. Once all partners answered (`QuorumComplete`), the submission phase opens.
+
+- A metric with fewer than 3 participants is **ignored**: no aggregate is computed and everyone submits `0` for it.
+- Partners who answered `0` must submit `0` for that metric (enforced in the web UI; masked values cannot be checked server-side).
+- Each metric gets a **composition signature** (SHA-256 of the sorted participant IDs). Admins see it per metric in the
+  Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`); equal signatures mean identical participant sets.
+- Endpoints: `POST /api/quorum/submit-batch`, `GET /api/quorum/status?epochId=`. Epochs created before this feature are treated as already complete.
+
 ## 🏗️ Project Structure
 
 ```

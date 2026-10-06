@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<MetricSubmission> Submissions => Set<MetricSubmission>();
     public DbSet<PartnerPublicKey> PublicKeys => Set<PartnerPublicKey>();
     public DbSet<PartnerCiphertext> Ciphertexts => Set<PartnerCiphertext>();
+    public DbSet<QuorumResponse> QuorumResponses => Set<QuorumResponse>();
     public DbSet<ClientCredential> ClientCredentials => Set<ClientCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -81,6 +82,16 @@ public class AppDbContext : DbContext
             e.Property(c => c.RecipientId).HasMaxLength(100);
             e.Property(c => c.RecipientDeviceId).HasMaxLength(100);
             e.Property(c => c.CiphertextBase64).HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<QuorumResponse>(e =>
+        {
+            e.HasKey(q => new { q.EpochId, q.ProducerId, q.Country, q.Month, q.Indicator, q.Segment });
+            e.Property(q => q.ProducerId).HasMaxLength(100);
+            e.Property(q => q.Country).HasMaxLength(100);
+            e.Property(q => q.Month).HasMaxLength(7);
+            e.Property(q => q.Indicator).HasMaxLength(64);
+            e.Property(q => q.Segment).HasMaxLength(64);
         });
 
         modelBuilder.Entity<ClientCredential>(e =>

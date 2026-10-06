@@ -94,6 +94,7 @@ public class RegistryController : ControllerBase
                     EndDate = e.EndDate,
                     ProducerCount = e.ProducerCount,
                     IsClosed = e.IsClosed,
+                    QuorumComplete = e.QuorumComplete,
                     ProducerIds = e.ProducerIds,
                     IsEligible = e.ProducerIds.Contains(producerId)
                 })

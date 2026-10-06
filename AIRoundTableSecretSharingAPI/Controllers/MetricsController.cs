@@ -20,6 +20,7 @@ public class MetricsController : ControllerBase
 
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IQuorumRepository _quorumRepo;
     private readonly IKeyRepository _keyRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<MetricsController> _logger;
@@ -27,12 +28,14 @@ public class MetricsController : ControllerBase
     public MetricsController(
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
+        IQuorumRepository quorumRepo,
         IKeyRepository keyRepo,
         ICiphertextRepository ciphertextRepo,
         ILogger<MetricsController> logger)
     {
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
+        _quorumRepo = quorumRepo;
         _keyRepo = keyRepo;
         _ciphertextRepo = ciphertextRepo;
         _logger = logger;
@@ -231,6 +234,24 @@ public class MetricsController : ControllerBase
         if (epoch == null)
             return NotFound("No epoch for date");
 
+        var quorumCell = QuorumGrid.Evaluate(epoch, await _quorumRepo.GetByEpochAsync(epoch.EpochId))
+            .FirstOrDefault(c => c.Country == country && c.Month == month && c.Indicator == indicator && c.Segment == segment);
+        if (epoch.QuorumComplete && quorumCell is { Ignored: true })
+        {
+            return Ok(new AggregationResult
+            {
+                Status = "ignored",
+                Country = country,
+                Month = month,
+                Indicator = indicator,
+                Segment = segment,
+                Total = null,
+                SubmissionCount = 0,
+                ExpectedSubmissions = epoch.ProducerCount,
+                MissingProducers = new List<string>()
+            });
+        }
+
         var submissions = await _submissionRepo.GetSubmissionsAsync(country, month, indicator, segment, epoch.EpochId);
         var submittedProducers = submissions
             .Select(s => s.ProducerId)
@@ -331,6 +352,10 @@ public class MetricsController : ControllerBase
 
         if (epoch.IsClosed)
             return new EpochGate(null, BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId }));
+
+        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
+        if (!epoch.QuorumComplete)
+            return new EpochGate(null, UnprocessableEntity(new { error = "Quorum Check is not complete", epochId = epoch.EpochId }));
 
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
         if (epoch.IsClosed)

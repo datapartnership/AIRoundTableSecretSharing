@@ -17,6 +17,7 @@ public class AdminController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IQuorumRepository _quorumRepo;
     private readonly IKeyRepository _keyRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
     private readonly IClientCredentialService _credentialService;
@@ -26,6 +27,7 @@ public class AdminController : ControllerBase
         AppDbContext db,
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
+        IQuorumRepository quorumRepo,
         IKeyRepository keyRepo,
         ICiphertextRepository ciphertextRepo,
         IClientCredentialService credentialService,
@@ -34,6 +36,7 @@ public class AdminController : ControllerBase
         _db = db;
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
+        _quorumRepo = quorumRepo;
         _keyRepo = keyRepo;
         _ciphertextRepo = ciphertextRepo;
         _credentialService = credentialService;
@@ -51,6 +54,7 @@ public class AdminController : ControllerBase
         _logger.LogWarning("Admin database reset initiated by {User}.", User.Identity?.Name ?? "unknown");
 
         await _submissionRepo.ClearAllAsync();
+        await _quorumRepo.ClearAllAsync();
         await _ciphertextRepo.ClearAsync();
         await _keyRepo.ClearAsync();
         await _producerRepo.ClearAllAsync();
@@ -150,7 +154,8 @@ public class AdminController : ControllerBase
                 EndDate = null,
                 ProducerIds = sortedProducerIds,
                 ProducerCount = sortedProducerIds.Count,
-                IsClosed = false
+                IsClosed = false,
+                QuorumComplete = false
             };
 
             await _producerRepo.CreateEpochAsync(epoch);
@@ -224,7 +229,8 @@ public class AdminController : ControllerBase
                 StartDate = e.StartDate,
                 EndDate = e.EndDate,
                 ProducerCount = e.ProducerCount,
-                IsClosed = e.IsClosed
+                IsClosed = e.IsClosed,
+                QuorumComplete = e.QuorumComplete
             }).ToList()
         });
     }
@@ -241,6 +247,7 @@ public class AdminController : ControllerBase
         if (epoch == null)
             return NotFound(new { error = "Epoch not found" });
 
+        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
@@ -261,6 +268,7 @@ public class AdminController : ControllerBase
             return NotFound(new { error = "No active epoch found" });
         }
 
+        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
@@ -294,6 +302,15 @@ public class AdminController : ControllerBase
             })
             .ToList();
 
+        var quorumResponses = await _quorumRepo.GetByEpochAsync(epoch.EpochId);
+        var quorumCells = QuorumGrid.Evaluate(epoch, quorumResponses);
+        var ignoredKeys = epoch.QuorumComplete
+            ? quorumCells.Where(c => c.Ignored).Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment)).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        var answered = quorumResponses
+            .GroupBy(r => r.ProducerId)
+            .ToDictionary(g => g.Key, g => g.Select(r => EpochGrid.CellKey(r.Country, r.Month, r.Indicator, r.Segment)).Distinct().Count());
+
         var aggregates = new List<AggregationResult>();
         if (missingCells.Count == 0 && epoch.ProducerIds.Count > 0)
         {
@@ -303,6 +320,9 @@ public class AdminController : ControllerBase
                 {
                     foreach (var (indicator, segment) in EpochGrid.Series)
                     {
+                        // Cells below quorum are never aggregated
+                        if (ignoredKeys.Contains(EpochGrid.CellKey(country, month, indicator, segment)))
+                            continue;
                         var cell = submissions
                             .Where(s => s.Country == country && s.Month == month
                                         && s.Indicator == indicator && s.Segment == segment)
@@ -335,7 +355,30 @@ public class AdminController : ControllerBase
             EndDate = epoch.EndDate,
             PartnerCount = epoch.ProducerCount,
             IsClosed = epoch.IsClosed,
+            QuorumComplete = epoch.QuorumComplete,
             Partners = partners,
+            QuorumPartners = epoch.ProducerIds.Select(id =>
+            {
+                var n = answered.GetValueOrDefault(id);
+                return new QuorumPartnerStatus
+                {
+                    ProducerId = id,
+                    DisplayName = NameOf(id),
+                    AnsweredCells = n,
+                    Done = n >= EpochGrid.CellCount
+                };
+            }).ToList(),
+            QuorumCells = quorumCells.Select(c => new QuorumCellInfo
+            {
+                Country = c.Country,
+                Month = c.Month,
+                Indicator = c.Indicator,
+                Segment = c.Segment,
+                ParticipantCount = c.ParticipantCount,
+                Ignored = c.Ignored,
+                Signature = c.Signature,
+                Participants = c.Participants.Select(id => new EpochPartnerInfo { ProducerId = id, DisplayName = NameOf(id) }).ToList()
+            }).ToList(),
             MissingProducers = missingProducers,
             Aggregates = aggregates
         };

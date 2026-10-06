@@ -99,4 +99,14 @@ public class EfProducerRepository : IProducerRepository
         epoch.IsClosed = true;
         await _db.SaveChangesAsync();
     }
+
+    public async Task MarkQuorumCompleteAsync(int epochId)
+    {
+        var epoch = await _db.Epochs.FindAsync(epochId);
+        if (epoch == null || epoch.QuorumComplete)
+            return;
+
+        epoch.QuorumComplete = true;
+        await _db.SaveChangesAsync();
+    }
 }
