@@ -38,4 +38,24 @@ public static class EpochLifecycle
         await producers.MarkQuorumCompleteAsync(epoch.EpochId);
         epoch.QuorumComplete = true;
     }
+
+    /// <summary>Returns an error payload when key exchange is not finished, otherwise null.</summary>
+    public static async Task<object?> KeyExchangeErrorAsync(
+        ProducerEpoch epoch,
+        IKeyRepository keys,
+        ICiphertextRepository ciphertexts)
+    {
+        var registeredKeyIds = (await keys.GetAllKeysAsync(epoch.EpochId)).Select(k => k.ProducerId).ToHashSet();
+        var missingKeys = epoch.ProducerIds.Except(registeredKeyIds).ToList();
+        if (missingKeys.Count > 0)
+            return new { error = "Key exchange incomplete: missing public keys", missingPublicKeys = missingKeys };
+
+        var n = epoch.ProducerIds.Count;
+        var expectedCiphertexts = n * (n - 1) / 2;
+        var actualCiphertexts = await ciphertexts.CountForPartnersAsync(epoch.EpochId, epoch.ProducerIds);
+        if (actualCiphertexts < expectedCiphertexts)
+            return new { error = "Key exchange incomplete: not all ciphertexts posted", expectedCiphertexts, actualCiphertexts };
+
+        return null;
+    }
 }

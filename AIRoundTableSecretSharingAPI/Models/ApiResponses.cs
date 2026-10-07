@@ -145,10 +145,9 @@ public class QuorumCellInfo
     public int ParticipantCount { get; set; }
     public bool Ignored { get; set; }
     public string Signature { get; set; } = string.Empty;
-    public List<EpochPartnerInfo> Participants { get; set; } = new();
 }
 
-/// <summary>Partner-facing quorum state: no composition, only counts and the caller's own answers.</summary>
+/// <summary>Partner-facing quorum state: progress, plus the metrics that fell below the quorum once it is complete.</summary>
 public class QuorumStatusResponse
 {
     public int EpochId { get; set; }
@@ -156,15 +155,5 @@ public class QuorumStatusResponse
     public bool MyDone { get; set; }
     public int AnsweredPartners { get; set; }
     public int PartnerCount { get; set; }
-    public List<QuorumMyCell> Cells { get; set; } = new();
-}
-
-public class QuorumMyCell
-{
-    public string Country { get; set; } = string.Empty;
-    public string Month { get; set; } = string.Empty;
-    public string Indicator { get; set; } = string.Empty;
-    public string Segment { get; set; } = string.Empty;
-    public bool Participates { get; set; }
-    public bool Ignored { get; set; }
+    public List<SubmittedEntry> IgnoredCells { get; set; } = new();
 }

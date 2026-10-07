@@ -361,30 +361,8 @@ public class MetricsController : ControllerBase
         if (epoch.IsClosed)
             return new EpochGate(null, BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId }));
 
-        var registeredKeys = await _keyRepo.GetAllKeysAsync(epoch.EpochId);
-        var registeredKeyIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
-        var missingKeys = epoch.ProducerIds.Except(registeredKeyIds).ToList();
-        if (missingKeys.Count > 0)
-        {
-            return new EpochGate(null, UnprocessableEntity(new
-            {
-                error = "Key exchange incomplete: missing public keys",
-                missingPublicKeys = missingKeys
-            }));
-        }
-
-        var n = epoch.ProducerIds.Count;
-        var expectedCiphertexts = n * (n - 1) / 2;
-        var actualCiphertexts = await _ciphertextRepo.CountForPartnersAsync(epoch.EpochId, epoch.ProducerIds);
-        if (actualCiphertexts < expectedCiphertexts)
-        {
-            return new EpochGate(null, UnprocessableEntity(new
-            {
-                error = "Key exchange incomplete: not all ciphertexts posted",
-                expectedCiphertexts,
-                actualCiphertexts
-            }));
-        }
+        if (await EpochLifecycle.KeyExchangeErrorAsync(epoch, _keyRepo, _ciphertextRepo) is { } keyError)
+            return new EpochGate(null, UnprocessableEntity(keyError));
 
         return new EpochGate(epoch, null);
     }

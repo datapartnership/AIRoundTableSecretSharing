@@ -273,44 +273,6 @@ public class AdminController : ControllerBase
         return Ok(await BuildEpochDetailAsync(epoch));
     }
 
-    /// <summary>
-    /// Ends the Quorum Check early. Partners who have not answered count as 0 (not participating) for every metric.
-    /// </summary>
-    [HttpPost("epochs/{epochId:int}/close-quorum")]
-    [ProducesResponseType(typeof(EpochDetailResponse), 200)]
-    [ProducesResponseType(404)]
-    [ProducesResponseType(400)]
-    public async Task<ActionResult<EpochDetailResponse>> CloseQuorum(int epochId)
-    {
-        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
-        if (epoch == null)
-            return NotFound(new { error = "Epoch not found" });
-        if (epoch.IsClosed || epoch.QuorumComplete)
-            return BadRequest(new { error = "Quorum Check is not running for this epoch" });
-
-        var existing = await _quorumRepo.GetByEpochAsync(epochId);
-        var answered = existing.Select(r => r.ProducerId).ToHashSet(StringComparer.Ordinal);
-        var now = DateTime.UtcNow;
-        var zeros = new List<QuorumResponse>();
-        foreach (var producerId in epoch.ProducerIds.Where(id => !answered.Contains(id)))
-            foreach (var country in EpochGrid.Countries)
-                foreach (var month in EpochGrid.Months(epoch.StartDate))
-                    foreach (var (indicator, segment) in EpochGrid.Series)
-                        zeros.Add(new QuorumResponse
-                        {
-                            EpochId = epochId, ProducerId = producerId, Country = country, Month = month,
-                            Indicator = indicator, Segment = segment, Participates = false, SubmittedAt = now
-                        });
-
-        await _quorumRepo.AddAsync(zeros);
-        await _producerRepo.MarkQuorumCompleteAsync(epochId);
-        epoch.QuorumComplete = true;
-        _logger.LogWarning("Admin {User} force-closed Quorum Check for epoch {EpochId}; {Count} partner(s) counted as 0.",
-            User.Identity?.Name ?? "unknown", epochId, epoch.ProducerIds.Count - answered.Count);
-
-        return Ok(await BuildEpochDetailAsync(epoch));
-    }
-
     private async Task<EpochDetailResponse> BuildEpochDetailAsync(ProducerEpoch epoch)
     {
         var submissions = await _submissionRepo.GetSubmissionsByEpochAsync(epoch.EpochId);
@@ -414,8 +376,7 @@ public class AdminController : ControllerBase
                 Segment = c.Segment,
                 ParticipantCount = c.ParticipantCount,
                 Ignored = c.Ignored,
-                Signature = c.Signature,
-                Participants = c.Participants.Select(id => new EpochPartnerInfo { ProducerId = id, DisplayName = NameOf(id) }).ToList()
+                Signature = c.Signature
             }).ToList(),
             MissingProducers = missingProducers,
             Aggregates = aggregates

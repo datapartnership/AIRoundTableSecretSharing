@@ -154,14 +154,19 @@ The aggregator learns only the total (1,700,000) but **cannot determine** any in
 
 ## 🗳️ Quorum Check
 
-Every new epoch starts in a **Quorum Check** phase, before key exchange and submission. Each partner uploads the
-same CSV format with `value` = `1` (participate) or `0` (do not participate) for every metric cell. Answers are plain
-(unmasked) and final. Once all partners answered (`QuorumComplete`), the submission phase opens.
+Every new epoch has a **Quorum Check** that runs after key exchange and before data submission. Each partner uploads
+the same CSV format with `value` = `1` (participate) or `0` (do not participate) for every metric cell. Answers are
+**masked in the browser** with the pairwise shared secrets, so the aggregator only learns per-metric totals. Once all
+partners answered (`QuorumComplete`), the submission phase opens. There is no force-close: masks only cancel when every
+partner has answered.
 
+- Each answer carries three masked values: the 0/1 flag, and the flag times two secret random 64-bit **tags** held only in
+  the partner's browser. Their sums give the participant **count** and a **composition signature** (128 bits, hex).
 - A metric with fewer than 3 participants is **ignored**: no aggregate is computed and everyone submits `0` for it.
-- Partners who answered `0` must submit `0` for that metric (enforced in the web UI; masked values cannot be checked server-side).
-- Each metric gets a **composition signature** (SHA-256 of the sorted participant IDs). Admins see it per metric in the
-  Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`); equal signatures mean identical participant sets.
+- Partners who answered `0` must submit `0` for that metric (enforced in the web UI from answers kept in the browser;
+  masked values cannot be checked server-side).
+- Equal signatures within an epoch mean identical participant sets; the set itself is not revealed. Admins see count and
+  signature per metric in the Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`).
 - Endpoints: `POST /api/quorum/submit-batch`, `GET /api/quorum/status?epochId=`. Epochs created before this feature are treated as already complete.
 
 ## 🏗️ Project Structure

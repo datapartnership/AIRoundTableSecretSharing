@@ -11,7 +11,8 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 
 /// <summary>
 /// Quorum Check: before submissions, partners declare per metric cell whether they will
-/// participate (1) or not (0). Answers are plain, not masked.
+/// participate (1) or not (0). Answers are masked with the pairwise key-exchange noise, so the server
+/// only learns per-metric totals (participant count and a composition fingerprint).
 /// </summary>
 [ApiController]
 [Authorize(Policy = "Partner")]
@@ -20,12 +21,21 @@ public class QuorumController : ControllerBase
 {
     private readonly IProducerRepository _producerRepo;
     private readonly IQuorumRepository _quorumRepo;
+    private readonly IKeyRepository _keyRepo;
+    private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<QuorumController> _logger;
 
-    public QuorumController(IProducerRepository producerRepo, IQuorumRepository quorumRepo, ILogger<QuorumController> logger)
+    public QuorumController(
+        IProducerRepository producerRepo,
+        IQuorumRepository quorumRepo,
+        IKeyRepository keyRepo,
+        ICiphertextRepository ciphertextRepo,
+        ILogger<QuorumController> logger)
     {
         _producerRepo = producerRepo;
         _quorumRepo = quorumRepo;
+        _keyRepo = keyRepo;
+        _ciphertextRepo = ciphertextRepo;
         _logger = logger;
     }
 
@@ -54,6 +64,10 @@ public class QuorumController : ControllerBase
         if (epoch.QuorumComplete)
             return BadRequest(new { error = "Quorum Check is already complete", epochId });
 
+        // Masks only cancel once every pairwise secret exists
+        if (await EpochLifecycle.KeyExchangeErrorAsync(epoch, _keyRepo, _ciphertextRepo) is { } keyError)
+            return UnprocessableEntity(keyError);
+
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var now = DateTime.UtcNow;
         var responses = new List<QuorumResponse>();
@@ -64,8 +78,6 @@ public class QuorumController : ControllerBase
             var indicator = r.Indicator?.Trim() ?? string.Empty;
             var segment = r.Segment?.Trim() ?? string.Empty;
 
-            if (r.Value is not (0 or 1))
-                return BadRequest(new { error = "Quorum value must be 0 or 1", country, month, indicator, segment });
             if (!EpochGrid.IsRequiredCell(country, month, indicator, segment, epoch.StartDate))
                 return BadRequest(new { error = "Cell is not in the required epoch grid", country, month, indicator, segment });
             if (!seen.Add(EpochGrid.CellKey(country, month, indicator, segment)))
@@ -79,7 +91,9 @@ public class QuorumController : ControllerBase
                 Month = month,
                 Indicator = indicator,
                 Segment = segment,
-                Participates = r.Value == 1,
+                MaskedCount = r.MaskedCount,
+                MaskedTagA = r.MaskedTagA,
+                MaskedTagB = r.MaskedTagB,
                 SubmittedAt = now
             });
         }
@@ -132,21 +146,13 @@ public class QuorumController : ControllerBase
             PartnerCount = epoch.ProducerCount
         };
 
-        // Only reveal ignored cells once everyone answered; partners never see who participates
-        var ignored = epoch.QuorumComplete
-            ? QuorumGrid.Evaluate(epoch, all).Where(c => c.Ignored)
-                .Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment)).ToHashSet(StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
-
-        response.Cells = mine.Select(m => new QuorumMyCell
+        if (epoch.QuorumComplete)
         {
-            Country = m.Country,
-            Month = m.Month,
-            Indicator = m.Indicator,
-            Segment = m.Segment,
-            Participates = m.Participates,
-            Ignored = ignored.Contains(EpochGrid.CellKey(m.Country, m.Month, m.Indicator, m.Segment))
-        }).ToList();
+            response.IgnoredCells = QuorumGrid.Evaluate(epoch, all)
+                .Where(c => c.Ignored)
+                .Select(c => new SubmittedEntry { Country = c.Country, Month = c.Month, Indicator = c.Indicator, Segment = c.Segment })
+                .ToList();
+        }
 
         return Ok(response);
     }
