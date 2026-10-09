@@ -20,6 +20,12 @@ public class AddProducerResponse
     public ProducerEpoch Epoch { get; set; } = null!;
 }
 
+public class CancelEpochRequest
+{
+    [System.ComponentModel.DataAnnotations.MaxLength(500)]
+    public string? Reason { get; set; }
+}
+
 public class ReplaceProducersRequest
 {
     public string? StartMonth { get; set; }
@@ -86,10 +92,14 @@ public class EpochSummary
     public int ProducerCount { get; set; }
     public bool IsClosed { get; set; }
     public bool QuorumComplete { get; set; }
-    public string Phase => IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
+    public DateTime? CancelledAt { get; set; }
+    public string? CancelReason { get; set; }
+    public int? ReplacedByEpochId { get; set; }
+    public bool IsCancelled => CancelledAt != null;
+    public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<string> ProducerIds { get; set; } = new();
     public bool IsEligible { get; set; }
-    public bool CanParticipate => IsEligible && !IsClosed;
+    public bool CanParticipate => IsEligible && !IsClosed && !IsCancelled;
 }
 
 public class EpochListResponse
@@ -119,7 +129,11 @@ public class EpochDetailResponse
     public int PartnerCount { get; set; }
     public bool IsClosed { get; set; }
     public bool QuorumComplete { get; set; }
-    public string Phase => IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
+    public DateTime? CancelledAt { get; set; }
+    public string? CancelReason { get; set; }
+    public int? ReplacedByEpochId { get; set; }
+    public bool IsCancelled => CancelledAt != null;
+    public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<EpochPartnerInfo> Partners { get; set; } = new();
     public List<QuorumPartnerStatus> QuorumPartners { get; set; } = new();
     public List<QuorumCellInfo> QuorumCells { get; set; } = new();

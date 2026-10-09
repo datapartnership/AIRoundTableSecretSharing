@@ -332,6 +332,11 @@ public class MetricsController : ControllerBase
         var epoch = await _producerRepo.GetEpochForDateAsync(monthDate);
         if (epoch == null || epoch.EpochId != submittedEpochId)
         {
+            // Cancelled epochs never match by date; tell the partner why instead of "Invalid epoch"
+            if (await _producerRepo.GetEpochByIdAsync(submittedEpochId) is { } submitted
+                && EpochLifecycle.CancelledError(submitted) is { } cancelled)
+                return new EpochGate(null, Conflict(cancelled));
+
             return new EpochGate(null, BadRequest(new
             {
                 error = "Invalid epoch",

@@ -18,7 +18,7 @@ public class EfProducerRepository : IProducerRepository
 
     public Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date) =>
         _db.Epochs
-            .Where(e => e.StartDate <= date && (e.EndDate == null || e.EndDate > date))
+            .Where(e => e.CancelledAt == null && e.StartDate <= date && (e.EndDate == null || e.EndDate > date))
             .OrderByDescending(e => e.StartDate)
             .FirstOrDefaultAsync();
 
@@ -69,7 +69,7 @@ public class EfProducerRepository : IProducerRepository
 
     public async Task CreateEpochAsync(ProducerEpoch epoch)
     {
-        var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(e => e.EndDate == null);
+        var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(e => e.EndDate == null && e.CancelledAt == null);
         if (currentEpoch != null)
             currentEpoch.EndDate = epoch.StartDate;
 
@@ -107,6 +107,20 @@ public class EfProducerRepository : IProducerRepository
             return;
 
         epoch.QuorumComplete = true;
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task CancelEpochAsync(int epochId, string? reason, int? replacedByEpochId)
+    {
+        var epoch = await _db.Epochs.FindAsync(epochId);
+        if (epoch == null)
+            return;
+
+        epoch.CancelledAt ??= DateTime.UtcNow;
+        if (reason != null)
+            epoch.CancelReason = reason;
+        if (replacedByEpochId != null)
+            epoch.ReplacedByEpochId = replacedByEpochId;
         await _db.SaveChangesAsync();
     }
 }

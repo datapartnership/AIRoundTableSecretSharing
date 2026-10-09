@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Services;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
@@ -50,6 +51,8 @@ public class CiphertextController : ControllerBase
         var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
         if (epoch == null || !epoch.ProducerIds.Contains(senderId) || !epoch.ProducerIds.Contains(request.RecipientId))
             return Forbid();
+        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+            return Conflict(cancelled);
 
         if (string.IsNullOrEmpty(request.RecipientId) ||
             string.IsNullOrEmpty(request.CiphertextBase64))
@@ -79,7 +82,7 @@ public class CiphertextController : ControllerBase
 
             return Conflict(new
             {
-                error = "A ciphertext for this pair already exists. Recreate the epoch to start a new key exchange."
+                error = $"A ciphertext for this pair already exists. Contact {EpochLifecycle.SupportEmail} to ask an admin to recreate the epoch."
             });
         }
 

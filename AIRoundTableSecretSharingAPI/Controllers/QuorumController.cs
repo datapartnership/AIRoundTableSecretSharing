@@ -59,6 +59,8 @@ public class QuorumController : ControllerBase
             return BadRequest(new { error = "Invalid epoch", submittedEpoch = epochId });
         if (!epoch.ProducerIds.Contains(producerId))
             return BadRequest(new { error = "Producer not in epoch", producerId, epochId });
+        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+            return Conflict(cancelled);
         if (epoch.IsClosed)
             return BadRequest(new { error = "Epoch is closed", epochId });
         if (epoch.QuorumComplete)

@@ -12,7 +12,7 @@ public static class EpochLifecycle
         ISubmissionRepository submissions,
         IProducerRepository producers)
     {
-        if (epoch.IsClosed)
+        if (epoch.IsClosed || epoch.IsCancelled)
             return;
 
         var rows = await submissions.GetSubmissionsByEpochAsync(epoch.EpochId);
@@ -28,7 +28,7 @@ public static class EpochLifecycle
         IQuorumRepository quorum,
         IProducerRepository producers)
     {
-        if (epoch.QuorumComplete)
+        if (epoch.QuorumComplete || epoch.IsCancelled)
             return;
 
         var responses = await quorum.GetByEpochAsync(epoch.EpochId);
@@ -38,6 +38,21 @@ public static class EpochLifecycle
         await producers.MarkQuorumCompleteAsync(epoch.EpochId);
         epoch.QuorumComplete = true;
     }
+
+    public const string SupportEmail = "datapartnership@worldbank.org";
+
+    /// <summary>Returns an error payload when an admin cancelled the epoch, otherwise null.</summary>
+    public static object? CancelledError(ProducerEpoch epoch) =>
+        epoch.IsCancelled
+            ? new
+            {
+                error = epoch.ReplacedByEpochId is { } next
+                    ? $"Epoch {epoch.EpochId} was cancelled by an admin and replaced by epoch {next}."
+                    : $"Epoch {epoch.EpochId} was cancelled by an admin.",
+                code = "epoch-cancelled",
+                replacedByEpochId = epoch.ReplacedByEpochId
+            }
+            : null;
 
     /// <summary>Returns an error payload when key exchange is not finished, otherwise null.</summary>
     public static async Task<object?> KeyExchangeErrorAsync(

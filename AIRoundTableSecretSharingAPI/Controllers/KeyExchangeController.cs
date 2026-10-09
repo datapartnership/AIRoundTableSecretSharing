@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Services;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using AIRoundTableSecretSharingAPI.Models;
@@ -79,6 +80,8 @@ public class KeyExchangeController : ControllerBase
         var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
         if (epoch == null || !epoch.ProducerIds.Contains(producerId))
             return Forbid();
+        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+            return Conflict(cancelled);
 
         var keyError = ValidatePublicKey(request.PublicKeyBase64);
         if (keyError != null)
@@ -89,7 +92,7 @@ public class KeyExchangeController : ControllerBase
         {
             return Conflict(new
             {
-                error = "A different public key is already registered for this partner. Recreate the epoch to start a new key exchange."
+                error = $"A different public key is already registered for this partner. Contact {EpochLifecycle.SupportEmail} to ask an admin to recreate the epoch."
             });
         }
 
@@ -132,6 +135,8 @@ public class KeyExchangeController : ControllerBase
         var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
         if (epoch == null || !epoch.ProducerIds.Contains(producerId))
             return Forbid();
+        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+            return Conflict(cancelled);
 
         var keyError = ValidatePublicKey(request.PublicKeyBase64);
         if (keyError != null)
@@ -144,7 +149,7 @@ public class KeyExchangeController : ControllerBase
         {
             return Conflict(new
             {
-                error = "The key exchange has already started, so your key can't be replaced. Ask an admin to recreate the epoch.",
+                error = $"The key exchange has already started, so your key can't be replaced. Contact {EpochLifecycle.SupportEmail} to ask an admin to recreate the epoch.",
                 code = "exchange-started"
             });
         }

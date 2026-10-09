@@ -16,6 +16,8 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/[controller]")]
 public class RegistryController : ControllerBase
 {
+    private const int CancelledEpochVisibleDays = 30;
+
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
     private readonly IConfiguration _configuration;
@@ -82,11 +84,16 @@ public class RegistryController : ControllerBase
             return Unauthorized();
         }
 
+        var now = DateTime.UtcNow;
         var epochs = await _producerRepo.GetAllEpochsAsync();
         return Ok(new EpochListResponse
         {
             Epochs = epochs
-                .Where(e => !e.IsClosed && (e.EndDate == null || e.EndDate > DateTime.UtcNow))
+                .Where(e => e.IsCancelled
+                    // Participants keep seeing a cancelled epoch for a while so they learn why it stopped
+                    ? e.ProducerIds.Contains(producerId) && e.CancelledAt > now.AddDays(-CancelledEpochVisibleDays)
+                    : !e.IsClosed && (e.EndDate == null || e.EndDate > now))
+                .OrderBy(e => e.IsCancelled)
                 .Select(e => new EpochSummary
                 {
                     EpochId = e.EpochId,
@@ -95,6 +102,9 @@ public class RegistryController : ControllerBase
                     ProducerCount = e.ProducerCount,
                     IsClosed = e.IsClosed,
                     QuorumComplete = e.QuorumComplete,
+                    CancelledAt = e.CancelledAt,
+                    CancelReason = e.CancelReason,
+                    ReplacedByEpochId = e.ReplacedByEpochId,
                     ProducerIds = e.ProducerIds,
                     IsEligible = e.ProducerIds.Contains(producerId)
                 })
