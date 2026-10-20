@@ -47,9 +47,11 @@ Suppose three partners contribute token counts for the same cell. Each pair agre
 | C | 20 | −8 −4 | 8 |
 | **Total** | **170** | **0** | **170** |
 
-The aggregator receives 123, 39, and 8. Adding them gives 170 because every mask appears once with each sign. These small masks illustrate cancellation. The implementation uses much larger masks to protect individual contributions.
+The aggregator receives 123, 39, and 8. Adding them gives 170 because every mask appears once with each sign. These small masks illustrate cancellation.
 
-In the implementation, partners derive masks from their shared secrets and the cell identifiers. Masks span a 64-bit integer range, and addition wraps around that range. The aggregation service uses the same arithmetic to recover the total. The pairwise secrets are established using **ML-KEM-768**, a cryptographic mechanism for establishing a shared secret using a public key and an encrypted message.
+The implementation uses large masks to hide each partner’s figures. Calculations stay within a fixed 64-bit range using **modulo arithmetic**: values that pass either end of the range continue from the other end. This prevents the size of a masked value from exposing the original figure, while allowing matching positive and negative masks to cancel exactly. The aggregator recovers the correct total as long as that total fits within the supported range.
+
+Partners derive these masks from their shared secrets and the cell identifiers. The pairwise secrets are established using **ML-KEM-768**, a cryptographic mechanism for establishing a shared secret using a public key and an encrypted message.
 
 For the implementation, see [key exchange][kem] and [mask generation and summation][masks].
 
@@ -88,7 +90,7 @@ The [API project](AIRoundTableSecretSharingAPI/) and [shared library](AIRoundTab
 | Count contributors and exclude metrics below quorum | [Quorum submission][quorum] and [participation evaluation][quorum-grid] |
 | Accept figures and return results | [Submission gates][submission-gate], [metric results][results], and [administrator summary][admin-results] |
 
-For each pair, the partner with the larger ID in ordinal string order establishes the shared secret for the smaller one. The smaller partner adds the derived mask and the larger subtracts it. Metric masks use HMAC-SHA256, a keyed function that both partners can evaluate from their secret, over the UTF-8 string `country|month|indicator|segment`. On a little-endian host, the C# helper interprets the first eight output bytes as a signed 64-bit integer. Clients must match the identifiers, encoding, byte order, and arithmetic. The recovered total must fit within a signed 64-bit integer.
+For each pair, the partner with the larger ID in ordinal string order establishes the shared secret for the smaller one. The smaller partner adds the derived mask and the larger subtracts it. Metric masks use HMAC-SHA256, a keyed function that both partners can evaluate from their secret, over the UTF-8 string `country|month|indicator|segment`. On a little-endian host, the C# helper interprets the first eight output bytes as a signed 64-bit integer. Clients must match the identifiers, encoding, byte order, and arithmetic. Masking and summation use arithmetic modulo 2⁶⁴. The recovered total must fit within a signed 64-bit integer.
 
 Key-exchange requests include round and device identifiers. Participation answers contain three masked values: a yes/no flag and that flag multiplied by each of two secret random tags. The aggregation service sums the flags to count contributors and combines the tag sums into a group fingerprint. Matching fingerprints are intended to identify matching contributor groups within a round, although collisions are possible. Comparing fingerprints across rounds would require a consistent tagging convention that the current code does not establish. The client must use separate masks for participation quantities and usage figures.
 
