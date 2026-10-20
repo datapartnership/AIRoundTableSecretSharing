@@ -51,7 +51,8 @@ public static class EpochGrid
 
     public static List<(string ProducerId, string Country, string Month, string Indicator, string Segment)> MissingCells(
         ProducerEpoch epoch,
-        IEnumerable<MetricSubmission> submissions)
+        IEnumerable<MetricSubmission> submissions,
+        IReadOnlySet<string>? excludedKeys = null)
     {
         var months = Months(epoch.StartDate);
         var keys = submissions
@@ -64,12 +65,20 @@ public static class EpochGrid
             foreach (var country in Countries)
                 foreach (var month in months)
                     foreach (var (indicator, segment) in Series)
+                    {
+                        // Excluded cells (below the quorum) get no data from anyone
+                        if (excludedKeys != null && excludedKeys.Contains(CellKey(country, month, indicator, segment)))
+                            continue;
                         if (!keys.Contains((producerId, country, month, indicator, segment)))
                             missing.Add((producerId, country, month, indicator, segment));
+                    }
 
         return missing;
     }
 
-    public static bool IsFullySubmitted(ProducerEpoch epoch, IEnumerable<MetricSubmission> submissions) =>
-        epoch.ProducerIds.Count > 0 && MissingCells(epoch, submissions).Count == 0;
+    public static bool IsFullySubmitted(
+        ProducerEpoch epoch,
+        IEnumerable<MetricSubmission> submissions,
+        IReadOnlySet<string>? excludedKeys = null) =>
+        epoch.ProducerIds.Count > 0 && MissingCells(epoch, submissions, excludedKeys).Count == 0;
 }

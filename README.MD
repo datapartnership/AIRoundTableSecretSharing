@@ -162,9 +162,11 @@ partner has answered.
 
 - Each answer carries three masked values: the 0/1 flag, and the flag times two secret random 64-bit **tags** held only in
   the partner's browser. Their sums give the participant **count** and a **composition signature** (128 bits, hex).
-- A metric with fewer than 3 participants is **ignored**: no aggregate is computed and everyone submits `0` for it.
-- Partners who answered `0` must submit `0` for that metric (enforced in the web UI from answers kept in the browser;
-  masked values cannot be checked server-side).
+- A metric with fewer than 3 participants is **ignored**: no aggregate is computed and every partner leaves it out of
+  their data upload. The API rejects submissions for it (`400`), and it does not count toward epoch completion.
+- Partners who answered `0` leave that metric out of their CSV; the browser submits a masked `0` for it automatically so
+  every partner's masks still cancel. A CSV row for a declined or ignored metric is rejected in the web UI (declined
+  cells come from answers kept in the browser; masked values cannot be checked server-side).
 - Equal signatures within an epoch mean identical participant sets; the set itself is not revealed. Admins see count and
   signature per metric in the Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`).
 - Endpoints: `POST /api/quorum/submit-batch`, `GET /api/quorum/status?epochId=`. Epochs created before this feature are treated as already complete.

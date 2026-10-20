@@ -48,6 +48,16 @@ public static class QuorumGrid
         return results;
     }
 
+    /// <summary>
+    /// Cell keys that fell below the quorum. Partners submit no data for these cells and they don't count toward
+    /// epoch completion. Empty until every partner has answered (and for legacy epochs without a Quorum Check).
+    /// </summary>
+    public static HashSet<string> IgnoredKeys(ProducerEpoch epoch, IEnumerable<QuorumResponse> responses) =>
+        Evaluate(epoch, responses)
+            .Where(c => c.Ignored)
+            .Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment))
+            .ToHashSet(StringComparer.Ordinal);
+
     public static bool IsComplete(ProducerEpoch epoch, IEnumerable<QuorumResponse> responses)
     {
         if (epoch.ProducerIds.Count == 0) return false;

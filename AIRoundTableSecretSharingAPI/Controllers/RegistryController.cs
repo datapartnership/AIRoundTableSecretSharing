@@ -20,17 +20,20 @@ public class RegistryController : ControllerBase
 
     private readonly IProducerRepository _producerRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IQuorumRepository _quorumRepo;
     private readonly IConfiguration _configuration;
     private readonly ILogger<RegistryController> _logger;
 
     public RegistryController(
         IProducerRepository producerRepo,
         ISubmissionRepository submissionRepo,
+        IQuorumRepository quorumRepo,
         IConfiguration configuration,
         ILogger<RegistryController> logger)
     {
         _producerRepo = producerRepo;
         _submissionRepo = submissionRepo;
+        _quorumRepo = quorumRepo;
         _configuration = configuration;
         _logger = logger;
     }
@@ -60,7 +63,7 @@ public class RegistryController : ControllerBase
         if (epoch == null)
             return NotFound("No epoch found for date");
 
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         epoch.IsEligible = User.GetOid() is { } oid && epoch.ProducerIds.Contains(oid);
 
         _logger.LogInformation(

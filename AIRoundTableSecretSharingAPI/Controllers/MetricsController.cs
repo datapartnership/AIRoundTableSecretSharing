@@ -71,6 +71,10 @@ public class MetricsController : ControllerBase
             });
         }
 
+        var ignored = await EpochLifecycle.IgnoredKeysAsync(epoch, _quorumRepo);
+        if (ignored.Contains(EpochGrid.CellKey(submission.Country, submission.Month, submission.Indicator, submission.Segment)))
+            return BelowQuorumError(submission);
+
         var added = await _submissionRepo.AddSubmissionAsync(submission);
         if (!added)
             return Conflict("Duplicate submission");
@@ -79,7 +83,7 @@ public class MetricsController : ControllerBase
             "RECEIVED submission from {Producer} for {Country}/{Month}/{Indicator}/{Segment}: Value = {Value:N0}",
             submission.ProducerId, submission.Country, submission.Month, submission.Indicator, submission.Segment, submission.Value);
 
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         if (epoch.IsClosed)
             _logger.LogInformation("Epoch {EpochId} closed — all producers submitted every cell.", epoch.EpochId);
 
@@ -133,8 +137,12 @@ public class MetricsController : ControllerBase
             return gateError;
 
         var epoch = gate.Epoch!;
+        var ignored = await EpochLifecycle.IgnoredKeysAsync(epoch, _quorumRepo);
         foreach (var submission in submissions)
         {
+            if (ignored.Contains(EpochGrid.CellKey(submission.Country, submission.Month, submission.Indicator, submission.Segment)))
+                return BelowQuorumError(submission);
+
             if (!EpochGrid.IsRequiredCell(
                     submission.Country, submission.Month, submission.Indicator, submission.Segment, epoch.StartDate))
             {
@@ -164,7 +172,7 @@ public class MetricsController : ControllerBase
             "RECEIVED batch from {Producer}: {Inserted} new, {Skipped} already submitted, {Total} in request",
             producerId, toInsert.Count, submissions.Count - toInsert.Count, submissions.Count);
 
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         if (epoch.IsClosed)
             _logger.LogInformation("Epoch {EpochId} closed — all producers submitted every cell.", epoch.EpochId);
 
@@ -300,6 +308,16 @@ public class MetricsController : ControllerBase
         });
     }
 
+    private BadRequestObjectResult BelowQuorumError(MetricSubmission submission) =>
+        BadRequest(new
+        {
+            error = "Metric fell below the quorum; do not submit data for it",
+            country = submission.Country,
+            month = submission.Month,
+            indicator = submission.Indicator,
+            segment = submission.Segment
+        });
+
     private sealed record PreparedSubmission(DateTime MonthDate, ActionResult? Error);
 
     private PreparedSubmission PrepareSubmission(MetricSubmission submission, string producerId)
@@ -362,7 +380,7 @@ public class MetricsController : ControllerBase
         if (!epoch.QuorumComplete)
             return new EpochGate(null, UnprocessableEntity(new { error = "Quorum Check is not complete", epochId = epoch.EpochId }));
 
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         if (epoch.IsClosed)
             return new EpochGate(null, BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId }));
 

@@ -10,18 +10,26 @@ public static class EpochLifecycle
     public static async Task CloseIfCompleteAsync(
         ProducerEpoch epoch,
         ISubmissionRepository submissions,
-        IProducerRepository producers)
+        IProducerRepository producers,
+        IQuorumRepository quorum)
     {
         if (epoch.IsClosed || epoch.IsCancelled)
             return;
 
         var rows = await submissions.GetSubmissionsByEpochAsync(epoch.EpochId);
-        if (!EpochGrid.IsFullySubmitted(epoch, rows))
+        var ignored = await IgnoredKeysAsync(epoch, quorum);
+        if (!EpochGrid.IsFullySubmitted(epoch, rows, ignored))
             return;
 
         await producers.CloseEpochAsync(epoch.EpochId);
         epoch.IsClosed = true;
     }
+
+    /// <summary>Cell keys below the quorum; empty until the Quorum Check is complete (and for legacy epochs).</summary>
+    public static async Task<HashSet<string>> IgnoredKeysAsync(ProducerEpoch epoch, IQuorumRepository quorum) =>
+        epoch.QuorumComplete
+            ? QuorumGrid.IgnoredKeys(epoch, await quorum.GetByEpochAsync(epoch.EpochId))
+            : new HashSet<string>(StringComparer.Ordinal);
 
     public static async Task CompleteQuorumIfAnsweredAsync(
         ProducerEpoch epoch,

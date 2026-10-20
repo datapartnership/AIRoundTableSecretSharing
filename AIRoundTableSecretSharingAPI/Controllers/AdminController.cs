@@ -350,7 +350,7 @@ public class AdminController : ControllerBase
             return NotFound(new { error = "Epoch not found" });
 
         await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
 
@@ -371,14 +371,20 @@ public class AdminController : ControllerBase
         }
 
         await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
-        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo);
+        await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
 
     private async Task<EpochDetailResponse> BuildEpochDetailAsync(ProducerEpoch epoch)
     {
         var submissions = await _submissionRepo.GetSubmissionsByEpochAsync(epoch.EpochId);
-        var missingCells = EpochGrid.MissingCells(epoch, submissions);
+        var quorumResponses = await _quorumRepo.GetByEpochAsync(epoch.EpochId);
+        var quorumCells = QuorumGrid.Evaluate(epoch, quorumResponses);
+        var ignoredKeys = epoch.QuorumComplete
+            ? quorumCells.Where(c => c.Ignored).Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment)).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        // Cells below quorum get no data, so they are never missing
+        var missingCells = EpochGrid.MissingCells(epoch, submissions, ignoredKeys);
         var names = (await _producerRepo.GetProducersByIdsAsync(epoch.ProducerIds))
             .ToDictionary(p => p.ProducerId, p => p.DisplayName, StringComparer.Ordinal);
 
@@ -404,11 +410,6 @@ public class AdminController : ControllerBase
             })
             .ToList();
 
-        var quorumResponses = await _quorumRepo.GetByEpochAsync(epoch.EpochId);
-        var quorumCells = QuorumGrid.Evaluate(epoch, quorumResponses);
-        var ignoredKeys = epoch.QuorumComplete
-            ? quorumCells.Where(c => c.Ignored).Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment)).ToHashSet(StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
         var answered = quorumResponses
             .GroupBy(r => r.ProducerId)
             .ToDictionary(g => g.Key, g => g.Select(r => EpochGrid.CellKey(r.Country, r.Month, r.Indicator, r.Segment)).Distinct().Count());
