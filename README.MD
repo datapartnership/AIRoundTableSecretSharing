@@ -1,553 +1,141 @@
-# Privacy-Preserving Secure Aggregation
+# Privacy-preserving aggregation
 
-A .NET 10 + React implementation of **cryptographically secure multi-party aggregation** using pairwise noise cancellation with **ML-KEM-768** (FIPS 203, the NIST post-quantum Key Encapsulation Mechanism standard). Partners authenticate via Azure Entra ID and run the full four-phase protocol directly in the browser — no pre-shared secrets, no client credentials, no manual coordination.
+This project lets data partners combine statistics without sending their individual figures to the organisation collecting them. Each partner masks its figures locally. The server adds the masked submissions together, cancelling the masks and recovering the combined total.
 
-## 🎯 Problem Statement
+For the Development Data Partnership, the use case is collecting AI token usage statistics across providers by country, month, and category. Partners can contribute to a shared picture of usage while keeping their own figures confidential, subject to the [privacy assumptions and limits](#privacy-assumptions-and-limits) below.
 
-Imagine a scenario where the Development Data Partnership wants to collect monthly active user statistics from multiple messaging platforms (PartnerA, PartnerB, PartnerC) for each country. The partners want to contribute to the aggregate statistic but **cannot reveal their individual numbers** due to competitive sensitivity.
+This repository contains the .NET 10 aggregation API and a shared C# library. The partner workflow is designed for a browser application, but that application's source is not included in this checkout. Developers can inspect and run the API here; running a complete partner session also requires a compatible client.
 
-**Requirements:**
-- ✅ The aggregator learns the **total** across all partners
-- ✅ The aggregator **cannot** learn individual partner values (cryptographically enforced)
-- ✅ Partners do **not communicate** directly with each other
-- ✅ No pre-shared secrets required between partners
-- ✅ Secure against quantum adversaries (post-quantum KEM)
+## What is shared
 
-## 🔐 The Secure Pairwise Noise Cancellation Protocol
+The **aggregator** is the server that coordinates a collection and combines submissions. It receives masked figures associated with each partner, rather than the original figures.
 
-### Core Idea
-
-Each pair of partners establishes a **shared secret** using ML-KEM key encapsulation (facilitated by the aggregator, but the aggregator cannot recover the shared secret). From this secret, they derive **pairwise noise**: one partner adds it, the other subtracts it. When aggregated, the noise cancels perfectly, leaving only the true sum.
-
-### Why ML-KEM?
-
-ML-KEM (Module Lattice-based Key Encapsulation Mechanism, standardised as FIPS 203) is the NIST post-quantum replacement for ECDH. Unlike Diffie-Hellman, it is an asymmetric KEM: the **encapsulator** generates a fresh shared secret together with a ciphertext; the **decapsulator** recovers the same secret from the ciphertext using their private key. The aggregator relays the ciphertext but cannot recover the secret.
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  ML-KEM-768 KEY ENCAPSULATION (FIPS 203)                                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Convention: alphabetically LARGER partner encapsulates for the SMALLER one  │
-│  (B→A, C→A, C→B for a three-partner setup)                                  │
-│                                                                              │
-│  PartnerB (larger) generates:                                                │
-│    Encapsulate(pk_A) → (ciphertext_BA, secret_AB)                           │
-│    Posts ciphertext_BA to the aggregator                                     │
-│                                                                              │
-│  PartnerA (smaller) retrieves ciphertext_BA and:                             │
-│    Decapsulate(ciphertext_BA, sk_A) → secret_AB   ← SAME SECRET!            │
-│                                                                              │
-│  Aggregator stores: pk_A, pk_B, ciphertext_BA (all opaque blobs)            │
-│  Aggregator CANNOT recover: secret_AB (KEM security, IND-CCA2)              │
-│                                                                              │
-│  Noise = HMAC-SHA256(secret_AB, country|month|indicator|segment)[0..8]      │
-│  → Only the two partners can compute this, not the aggregator!              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Protocol Steps
-
-#### Phase 1: Key Generation and Registration
-
-Each partner generates an ML-KEM-768 key pair locally. Only the **encapsulation key** (public key, 1184 bytes) is posted to the aggregator. The **decapsulation key** (private key, 2400 bytes) never leaves the partner's system.
-
-```csharp
-// MlKemKeyExchange.cs
-MLKem kem = MLKem.GenerateKey(MLKemAlgorithm.MLKem768);
-byte[] encapsulationKey = kem.ExportEncapsulationKey(); // safe to share
-// decapsulation key stays local, never transmitted
-```
-
-```
-PartnerA → Aggregator: POST pk_A  (1184 bytes)
-PartnerB → Aggregator: POST pk_B
-PartnerC → Aggregator: POST pk_C
-```
-
-#### Phase 2: Encapsulation (Larger → Smaller)
-
-Each partner fetches all other partners' encapsulation keys. For every partner that is **alphabetically smaller**, it encapsulates and posts the resulting ciphertext:
-
-```csharp
-// PartnerB encapsulates for PartnerA
-using var partnerAKem = MLKem.ImportEncapsulationKey(MLKemAlgorithm.MLKem768, pk_A);
-partnerAKem.Encapsulate(out byte[] ciphertext_BA, out byte[] secret_AB);
-// POST ciphertext_BA to aggregator; keep secret_AB locally
-```
-
-```
-PartnerB → Aggregator: POST ciphertext_BA  (1088 bytes, addressed to A)
-PartnerC → Aggregator: POST ciphertext_CA  (addressed to A)
-PartnerC → Aggregator: POST ciphertext_CB  (addressed to B)
-PartnerA: no encapsulations (smallest)
-```
-
-#### Phase 3: Decapsulation (Smaller Recovers Secret)
-
-Each partner fetches ciphertexts addressed to it and decapsulates using its local private key:
-
-```csharp
-// PartnerA recovers both shared secrets
-byte[] secret_AB = myKem.Decapsulate(ciphertext_BA);
-byte[] secret_AC = myKem.Decapsulate(ciphertext_CA);
-```
-
-**The aggregator holds the ciphertexts but cannot decapsulate them** — only the holder of the decapsulation key can.
-
-#### Phase 4: Generate Noise and Submit
-
-Noise is derived per cell (country, month, indicator, segment) using HMAC-SHA256 with the shared secret as the key. The noise is the full signed 64-bit integer from the first 8 bytes of the HMAC, and all masking is done with wrap-around (mod 2^64) arithmetic. The sign depends on alphabetical order — the smaller partner adds, the larger subtracts:
-
-```csharp
-// SecureNoiseGenerator.cs
-var hmac   = new HMACSHA256(sharedSecret);
-var hash   = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}"));
-var noise  = BitConverter.ToInt64(hash, 0);         // first 8 bytes as LE signed int64
-
-int sign = (myId < otherId) ? +1 : -1;   // smaller partner adds, larger subtracts
-
-maskedValue = unchecked(actualValue + Σ(noise × sign))   // mod 2^64
-```
-
-The aggregator receives only `maskedValue`. Because the noise is uniform over the whole int64 range, each masked value is itself uniformly random and reveals nothing about the actual value; the aggregator cannot reproduce the noise without the shared secrets.
-
-#### Aggregation
-
-The aggregator sums all masked values with the same wrap-around arithmetic (`SecureNoiseGenerator.SumMasked`). The noise cancels exactly mod 2^64, leaving the true total as long as it fits in a signed int64:
-
-```
-Σ(maskedValue) mod 2^64 = Σ(actualValue) + 0 = Total ✓
-```
-
-### Mathematical Proof (3 Partners)
-
-Let:
-- `V_A`, `V_B`, `V_C` = actual values
-- `n_AB` = noise from secret between A and B (same value for both, derived via HMAC)
-- `n_AC` = noise from secret between A and C
-- `n_BC` = noise from secret between B and C
-
-| Partner | Masked Value |
-|---------|--------------|
-| PartnerA (smallest) | `V_A + n_AB + n_AC` |
-| PartnerB (middle)   | `V_B − n_AB + n_BC` |
-| PartnerC (largest)  | `V_C − n_AC − n_BC` |
-
-**Sum:**
-```
-(V_A + n_AB + n_AC) + (V_B − n_AB + n_BC) + (V_C − n_AC − n_BC)
-= V_A + V_B + V_C + (n_AB − n_AB) + (n_AC − n_AC) + (n_BC − n_BC)
-= V_A + V_B + V_C  ✓
-```
-
-### Numerical Example
-
-| Partner | Actual MAU | Noise Applied | Masked MAU |
-|---------|------------|---------------|------------|
-| PartnerA | 1,000,000 | +150,000 (with B) +80,000 (with C) | 1,230,000 |
-| PartnerB | 500,000 | −150,000 (with A) +45,000 (with C) | 395,000 |
-| PartnerC | 200,000 | −80,000 (with A) −45,000 (with B) | 75,000 |
-| **Total** | **1,700,000** | **0** | **1,700,000** ✓ |
-
-The aggregator learns only the total (1,700,000) but **cannot determine** any individual partner's MAU value.
-
-## 🗳️ Quorum Check
-
-Every new epoch has a **Quorum Check** that runs after key exchange and before data submission. Each partner uploads
-the same CSV format with `value` = `1` (participate) or `0` (do not participate) for every metric cell. Answers are
-**masked in the browser** with the pairwise shared secrets, so the aggregator only learns per-metric totals. Once all
-partners answered (`QuorumComplete`), the submission phase opens. There is no force-close: masks only cancel when every
-partner has answered.
-
-- Each answer carries three masked values: the 0/1 flag, and the flag times two secret random 64-bit **tags** held only in
-  the partner's browser. Their sums give the participant **count** and a **composition signature** (128 bits, hex).
-- A metric with fewer than 3 participants is **ignored**: no aggregate is computed and everyone submits `0` for it.
-- Partners who answered `0` must submit `0` for that metric (enforced in the web UI from answers kept in the browser;
-  masked values cannot be checked server-side).
-- Equal signatures within an epoch mean identical participant sets; the set itself is not revealed. Admins see count and
-  signature per metric in the Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`).
-- Endpoints: `POST /api/quorum/submit-batch`, `GET /api/quorum/status?epochId=`. Epochs created before this feature are treated as already complete.
-
-## 🏗️ Project Structure
-
-```
-AIRoundTableSecretSharing/
-├── AIRoundTableSecretSharingCommon.sln
-│
-├── AIRoundTableSecretSharingAPI/          # ASP.NET Core Web API (Aggregator)
-│   ├── Controllers/
-│   │   ├── AdminController.cs             # Reset, create epoch (admin group only)
-│   │   ├── MetricsController.cs           # Submit masked metrics, get aggregates
-│   │   ├── RegistryController.cs          # Partners & epoch registry; self-registration
-│   │   ├── KeyExchangeController.cs       # ML-KEM encapsulation key registration
-│   │   ├── CiphertextController.cs        # ML-KEM ciphertext relay
-│   │   └── ClaimsPrincipalExtensions.cs   # OID extraction from Entra JWT
-│   ├── Data/
-│   │   └── AppDbContext.cs                # EF Core DbContext (Azure SQL)
-│   ├── Migrations/                        # EF Core migrations
-│   ├── Models/
-│   │   └── ApiResponses.cs                # API response types
-│   ├── Repositories/                      # EF Core repository implementations
-│   ├── Services/
-│   │   └── DbClientCredentialService.cs   # (retained for historical compatibility)
-│   ├── Program.cs                         # DI setup, Entra auth, CORS, DB migration
-│   └── appsettings.json                   # Azure AD config, connection string
-│
-├── AIRoundTableSecretSharingCommon/       # Shared library
-│   ├── Core/
-│   │   ├── MlKemKeyExchange.cs            # ML-KEM-768 key gen, encapsulate, decapsulate
-│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 full-width noise (mod 2^64)
-│   │   └── DeterministicNoiseGenerator.cs # Hash-based noise (legacy console demo)
-│   ├── Models/                            # Shared DTOs (MetricSubmission, ProducerInfo, …)
-│   └── Producers/
-│       └── SecureProducerClient.cs        # .NET client with full ML-KEM protocol flow
-│
-├── AIRoundTableSecretSharingSecureDemo/   # Console demo (full ML-KEM exchange)
-│
-├── python-clients/                        # Reference Python implementation
-│   ├── keygen.py                          # ML-KEM-768 key generation (kyber-py)
-│   ├── exchange.py                        # Encapsulation / decapsulation
-│   ├── submit.py                          # Masked submission
-│   ├── generate_simulation.py             # Bulk test data generator
-│   └── PROTOCOL.md                        # Python-side protocol notes
-│
-└── web-ui/                                # React + MSAL partner / admin UI
-    └── src/
-        ├── pages/
-        │   ├── Home.jsx          # Landing page with protocol overview
-        │   ├── ProtocolFlow.jsx  # Automated 4-step wizard (key gen → submit)
-        │   ├── AdminPanel.jsx    # Create epochs, clear data (admin group only)
-        │   └── Results.jsx       # Aggregated results by country / month
-        └── utils/
-            ├── api.js            # All API calls (Entra token injected automatically)
-            ├── crypto.js         # ML-KEM-768 via `mlkem` npm package
-            └── noise.js          # HMAC-SHA256 noise; matches C# & Python exactly
-```
-
-## 🔧 Key Components
-
-### MlKemKeyExchange.cs
-
-Wraps `System.Security.Cryptography.MLKem` (built into .NET 9+):
-
-```csharp
-public class MlKemKeyExchange : IDisposable
-{
-    private readonly MLKem _kem;
-
-    public MlKemKeyExchange()
-    {
-        _kem = MLKem.GenerateKey(MLKemAlgorithm.MLKem768);
-    }
-
-    // Share this with other partners via the aggregator (1184 bytes)
-    public string GetPublicKeyBase64() => Convert.ToBase64String(_kem.ExportEncapsulationKey());
-
-    // Called by the alphabetically LARGER partner
-    public (byte[] ciphertext, byte[] sharedSecret) Encapsulate(byte[] partnerPublicKey)
-    {
-        using var partnerKem = MLKem.ImportEncapsulationKey(MLKemAlgorithm.MLKem768, partnerPublicKey);
-        partnerKem.Encapsulate(out byte[] ciphertext, out byte[] sharedSecret);
-        return (ciphertext, sharedSecret);  // POST ciphertext; keep sharedSecret
-    }
-
-    // Called by the alphabetically SMALLER partner after fetching ciphertext
-    public byte[] Decapsulate(byte[] ciphertext) => _kem.Decapsulate(ciphertext);
-}
-```
-
-### SecureNoiseGenerator.cs
-
-Derives full-width pairwise noise from a shared secret using HMAC-SHA256, and provides wrap-around helpers for masking and aggregation:
-
-```csharp
-public static long GenerateNoise(byte[] sharedSecret, string country, string month,
-                                  string indicator, string segment)
-{
-    using var hmac = new HMACSHA256(sharedSecret);
-    var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}"));
-    return BitConverter.ToInt64(hash, 0);
-}
-
-public static long ApplyNoise(long value, long noise, int sign) => unchecked(value + noise * sign);
-public static long SumMasked(IEnumerable<long> values) { /* unchecked running sum */ }
-
-// Smaller partner (alphabetically) adds; larger subtracts → noise cancels in the sum
-public static int GetNoiseSign(string myId, string otherId)
-    => string.Compare(myId, otherId, StringComparison.Ordinal) < 0 ? 1 : -1;
-```
-
-### Aggregator Data Flow
-
-```
-Phase 1 — Key Registration
-┌─────────────┐  POST pk_A (1184 B)  ┌──────────────┐
-│  PartnerA   │ ────────────────────► │              │
-└─────────────┘                       │  Key Store   │
-┌─────────────┐  POST pk_B           │  (encaps.    │
-│  PartnerB   │ ────────────────────► │   keys only) │
-└─────────────┘                       └──────────────┘
-
-Phase 2 — Ciphertext Relay
-┌─────────────┐  POST ct_BA (1088 B) ┌──────────────┐
-│  PartnerB   │ ────────────────────► │  Ciphertext  │
-└─────────────┘  POST ct_CA          │  Store       │
-┌─────────────┐ ─────────────────────►  (opaque     │
-│  PartnerC   │  POST ct_CB          │   blobs)     │
-└─────────────┘ ────────────────────► └──────────────┘
-
-Phase 3 — Decapsulation (local, no API call to aggregator)
-┌─────────────┐  GET ciphertexts     ┌──────────────┐
-│  PartnerA   │ ◄──────────────────── │  Ciphertext  │
-└─────────────┘  [ct_BA, ct_CA]      │  Store       │
-                                      └──────────────┘
-  PartnerA.Decapsulate(ct_BA) → secret_AB  (aggregator CANNOT do this)
-  PartnerA.Decapsulate(ct_CA) → secret_AC
-
-Phase 4 — Masked Submission
-┌─────────────┐  POST maskedMAU_A    ┌──────────────┐
-│  PartnerA   │ ────────────────────► │   Metrics    │
-└─────────────┘                       │   Store      │
-               Aggregator sums all → TotalMAU ✓
-```
-
-### Epochs
-
-An **epoch** represents a fixed set of partners for a time period. All partners in an epoch must submit before the aggregate is computed. This ensures noise cancellation works correctly (all pairs are complete) and lets partners join or leave without disrupting ongoing submissions.
-
-### API Endpoints
-
-All endpoints require a valid Azure Entra ID Bearer token. The caller's producer ID is read from the `oid` claim in the token — no `producerId` in the request body.
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/registry/producers` | GET | Partner | List all registered producers |
-| `/registry/producers/me` | POST | Partner (403 for admins) | Self-register (upsert) on first login |
-| `/registry/epoch` | GET | Partner | Get current epoch |
-| `/keyexchange/register` | POST | Participant | Register ML-KEM-768 encapsulation key |
-| `/keyexchange/keys` | GET | Partner | All partners' encapsulation keys |
-| `/keyexchange/status` | GET | Partner | Key registration status for current epoch |
-| `/ciphertext` | POST | Participant | Store a KEM ciphertext (sender → recipient) |
-| `/ciphertext` | GET | Partner | Fetch ciphertexts addressed to the caller |
-| `/metrics/submit` | POST | Participant | Submit a masked metric value |
-| `/metrics/submit-batch` | POST | Participant | Submit a batch of masked metric values |
-| `/metrics/aggregate` | GET | Admin | Get aggregate for a country / month |
-| `/admin/producers/reset-and-create-epoch` | POST | Admin | Select at least 3 registered partners and open a new epoch |
-| `/admin/reset` | POST | Admin | Clear all data |
-
-### Authentication — Azure Entra ID (Microsoft Identity Platform)
-
-All endpoints are protected by `AddMicrosoftIdentityWebApi`. Clients obtain a Bearer token from Entra ID using MSAL (interactive browser flow in the web UI, or device-code / client-credentials for CLI tools) and include it as `Authorization: Bearer <token>`.
-
-Authorization policies are enforced via group membership embedded in the access token:
-
-- **Partner** policy — caller must be a member of the `PartnerGroupId` or `AdminGroupId` group (read access)
-- **Participant** policy — caller must be a member of `PartnerGroupId` and **not** of `AdminGroupId`; required for key registration, ciphertext posting and metric submission
-- **Admin** policy — caller must be a member of the `AdminGroupId` group
-
-Admins cannot self-register, be selected into an epoch, or contribute data. Every epoch needs at least 3 registered participants.
-
-```json
-// appsettings.json
-{
-  "AzureAd": {
-    "Instance": "https://login.microsoftonline.com/",
-    "TenantId": "<tenant-id>",
-    "ClientId": "<api-app-client-id>",
-    "AdminGroupId": "<admin-aad-group-object-id>",
-    "PartnerGroupId": "<partner-aad-group-object-id>"
-  }
-}
-```
-
-These settings can also be supplied with environment variables. ASP.NET Core maps
-double underscores (`__`) to configuration section separators (`:`), so
-environment variables override the matching `appsettings.json` values:
-
-| Setting | Environment variable |
+| Information | Who has access |
 | --- | --- |
-| `AzureAd:Instance` | `AzureAd__Instance` |
-| `AzureAd:TenantId` | `AzureAd__TenantId` |
-| `AzureAd:ClientId` | `AzureAd__ClientId` |
-| `AzureAd:AdminGroupId` | `AzureAd__AdminGroupId` |
-| `AzureAd:PartnerGroupId` | `AzureAd__PartnerGroupId` |
-| `ConnectionStrings:DefaultConnection` | `ConnectionStrings__DefaultConnection` |
+| A partner's original figures, private key, and shared secrets | The partner's client; these should stay local |
+| Partner identities, the collection roster, and submission progress | The aggregator; authorised users can also access roster and status information |
+| Public keys and encrypted key-exchange messages | The aggregator relays these between partners |
+| Each partner's masked submissions | The aggregator stores these with partner and metric identifiers |
+| Number of contributors to each metric and a fingerprint for comparing contributor groups | The aggregator computes these during the participation check; administrators can see them |
+| Combined figures for eligible metrics | Available through the authenticated API after the required submissions arrive |
 
-For example, when running the container locally:
+Participation is not anonymous. The protection concerns the submitted figures, and the totals themselves can still reveal information when combined with other knowledge.
 
-```bash
-docker run --rm -p 8080:8080 \
-  -e AzureAd__Instance="https://login.microsoftonline.com/" \
-  -e AzureAd__TenantId="<tenant-id>" \
-  -e AzureAd__ClientId="<api-app-client-id>" \
-  -e AzureAd__AdminGroupId="<admin-aad-group-object-id>" \
-  -e AzureAd__PartnerGroupId="<partner-aad-group-object-id>" \
-  -e ConnectionStrings__DefaultConnection="<sql-connection-string>" \
-  <image-name>
-```
+## A collection round
 
-In Azure App Service or Container Apps, add the same names as application
-settings/environment variables. Do not bake tenant-specific values or connection
-strings into the Docker image.
+A **collection round**, called an *epoch* in the code, has a fixed roster of partners and a defined set of metrics. A metric is one combination of country, month, indicator, and category (called a *segment* in the API).
 
-The React web UI has its own build-time Vite environment variables for the
-same group IDs:
+1. **Register and join a round.** Partners authenticate with Microsoft Entra ID, the organisation's sign-in service. An administrator selects at least three registered partners and the starting month. Administrator accounts can observe and manage rounds but cannot contribute data.
+2. **Establish shared secrets.** Each partner's client generates a key pair locally and exchanges public keys and encrypted messages through the server. Every pair of partners ends up with a shared secret used to calculate matching masks. Partners do not need a direct connection to one another or secrets agreed in advance.
+3. **Confirm which metrics to contribute.** Each partner submits a masked yes/no answer for every metric. The system calls this the *quorum check*. Once everyone has answered, the server calculates how many partners will contribute to each metric. Metrics with fewer than three contributors are excluded from results.
+4. **Submit masked figures.** Each partner submits a masked value for every required metric, including a masked zero where it opted out or the metric was excluded. Every partner in the round must still submit so that all masks cancel.
+5. **Read the results.** The metric API returns a total once every partner has submitted that metric. The administrator's round summary waits until every partner has submitted every required metric, then the round closes.
 
-| Purpose | Web UI environment variable |
+The client must retain its private key and shared secrets through the round. If that state is lost after the exchange has started, an administrator may need to cancel and recreate the round; the server cannot recover those secrets.
+
+The current collection schema covers five countries, four months, and ten indicator/category combinations: 200 values per partner. It is defined in code rather than configured for each round. See the [collection schema][schema] for the countries and categories.
+
+## How the masks cancel
+
+Suppose three partners contribute token counts for the same metric. Each pair agrees on a mask: A–B uses 15, A–C uses 8, and B–C uses 4. One partner adds the pair's mask and the other subtracts it.
+
+| Partner | Original count | Masks applied | Submitted count |
+| --- | ---: | --- | ---: |
+| A | 100 | +15 +8 | 123 |
+| B | 50 | −15 +4 | 39 |
+| C | 20 | −8 −4 | 8 |
+| **Total** | **170** | **0** | **170** |
+
+The server receives 123, 39, and 8. Adding them gives 170 because every mask appears once with each sign. This illustrates cancellation; these small masks would not provide the protection used by the implementation.
+
+In the implementation, partners derive masks from their shared secrets and the metric identifiers. Masks span a 64-bit integer range, and addition wraps around that range. The server uses the same arithmetic to recover the total. The pairwise secrets are established using **ML-KEM-768**, a cryptographic mechanism for establishing a shared secret using a public key and an encrypted message.
+
+For the implementation, see [key exchange][kem] and [mask generation and summation][masks].
+
+## Privacy assumptions and limits
+
+The intended protection assumes that the server follows the protocol and tries to learn from the messages it receives, and that partners use a correct client and keep their local secrets private. A server that alters public keys, the roster, or client software is outside that assumption. Choosing ML-KEM for key exchange does not by itself protect the whole application against such behaviour.
+
+- **Collusion and other knowledge can expose a contribution.** If everyone except one contributor shares their figures, they can subtract those figures from the total to recover the remaining contribution. A minimum of three contributors does not eliminate this risk.
+- **Totals disclose information.** Comparing totals across overlapping groups or combining them with known figures can reveal individual values. The system returns exact totals; it does not add statistical noise to the published result.
+- **Every partner is needed.** There is no dropout recovery. A missing submission prevents the matching masks from cancelling. Administrators can cancel and recreate an unfinished round.
+- **The server cannot verify the underlying figures.** It validates identity, request format, and round membership, but cannot inspect a masked value to prove that it is truthful or that an opted-out partner contributed zero. Correct participation counts and fingerprints also depend on correctly formed client answers.
+- **Participation metadata remains visible.** The server knows who is in a round and who has submitted. Contributor counts and group fingerprints reveal additional information about participation; a count equal to the roster size, for example, identifies the whole group as contributors.
+- **Local state must remain private and available.** A compromised client can expose original figures or secrets. Losing secrets can prevent completion of a round.
+
+## System architecture
+
+| Component | Responsibility |
 | --- | --- |
-| Admin group object ID | `VITE_ADMIN_GROUP_ID` |
-| Partner group object ID | `VITE_PARTNER_GROUP_ID` |
+| Partner client | Holds original data and private keys, establishes shared secrets, and masks participation answers and figures locally. Browser client source is not included in this checkout. |
+| ASP.NET Core API | Authenticates requests, manages rounds, relays key-exchange messages, validates submissions, and computes totals. |
+| SQL Server / Azure SQL database | Stores partner records, rounds, public keys, encrypted key-exchange messages, masked answers, and masked figures. |
+| Microsoft Entra ID | Supplies identity tokens and group membership used to distinguish partners and administrators. |
+| Shared C# library | Defines data models, the collection schema, key-exchange and masking helpers, and participation evaluation. |
 
-Keep these values aligned with `AzureAd__AdminGroupId` and
-`AzureAd__PartnerGroupId` for the API. The API remains the authorization
-boundary; the web UI uses `VITE_ADMIN_GROUP_ID` only to hide or show admin
-navigation.
+## For developers
 
-The caller's Azure AD Object ID (`oid` claim) is used as the `producerId` everywhere — no per-client secrets or pre-seeded partner lists are required.
+### Follow the implementation
 
-## 🚀 Getting Started
+The [API project](AIRoundTableSecretSharingAPI/) and [shared library](AIRoundTableSecretSharingCommon/) contain the implementation available here. These code references follow the collection workflow:
 
-### Prerequisites
+| Stage | Relevant code |
+| --- | --- |
+| Identify partners and enforce roles | [Authorization policies][auth] and [partner registration][registration] |
+| Establish pairwise secrets | [ML-KEM helper][kem], [public-key registration][keys], and [encrypted-message relay][ciphertexts] |
+| Derive masks and sum submissions | [Mask generation, sign ordering, and wrap-around arithmetic][masks] |
+| Count contributors and exclude metrics below quorum | [Quorum submission][quorum] and [participation evaluation][quorum-grid] |
+| Accept figures and return results | [Submission gates][submission-gate], [metric results][results], and [administrator summary][admin-results] |
 
-- .NET 10 SDK
-- Node.js 20+
-- Access to an Azure SQL database (set `ConnectionStrings:DefaultConnection` in `appsettings.json` or `ConnectionStrings__DefaultConnection` as an environment variable)
-- An Azure Entra ID tenant with:
-  - An API app registration (set as `AzureAd:ClientId` in `appsettings.json` or `AzureAd__ClientId` as an environment variable)
-  - A Web UI app registration (set as `VITE_MSAL_CLIENT_ID` in the web UI environment)
-  - An admin security group and a partner security group
+For each pair, the partner with the larger ID in ordinal string order establishes the shared secret for the smaller one. The smaller partner adds the derived mask and the larger subtracts it. Metric masks use HMAC-SHA256, a keyed function that both partners can evaluate from their secret, over the UTF-8 string `country|month|indicator|segment`. On a little-endian host, the C# helper interprets the first eight output bytes as a signed 64-bit integer. Clients must match the identifiers, encoding, byte order, and arithmetic. The recovered total must fit within a signed 64-bit integer.
+
+Key-exchange requests include round and device identifiers. Participation answers contain three masked values: a yes/no flag and that flag multiplied by each of two secret random tags. The server sums the flags to count contributors and combines the tag sums into a group fingerprint. Matching fingerprints are intended to identify matching contributor groups within a round; collisions are possible. The client must use separate masks for participation quantities and metric figures. The browser implementation of this convention is not included here.
 
 ### Run the API
 
-```bash
-cd AIRoundTableSecretSharingAPI
-dotnet run
+You need the .NET 10 SDK, a SQL Server or Azure SQL database, and Entra configuration for the API. Authenticated requests also require an Entra client that can obtain access tokens for the API, with the relevant group membership included in those tokens.
+
+Supply these configuration values through environment variables or local application settings. Double underscores map to configuration sections in `appsettings.json`.
+
+| Environment variable | Value |
+| --- | --- |
+| `AzureAd__Instance` | `https://login.microsoftonline.com/` |
+| `AzureAd__TenantId` | Entra tenant ID |
+| `AzureAd__ClientId` | API app registration's client ID |
+| `AzureAd__AdminGroupId` | Administrator group object ID |
+| `AzureAd__PartnerGroupId` | Partner group object ID |
+| `ConnectionStrings__DefaultConnection` | SQL connection string |
+| `Cors__AllowedOrigins` | Comma-separated browser client origins |
+
+From the repository root:
+
+```sh
+dotnet restore AIRoundTableSecretSharingCommon.sln --configfile nuget.docker.config
+dotnet build AIRoundTableSecretSharingCommon.sln --no-restore
+dotnet run --project AIRoundTableSecretSharingAPI --no-launch-profile --no-restore --urls http://localhost:5149
 ```
 
-The API runs on `http://localhost:5149`. On first start it applies EF Core migrations automatically.
+The selected NuGet configuration uses nuget.org; the default `nuget.config` uses the World Bank package mirror. Startup [applies database migrations automatically][startup], so use a database whose schema this application may update. Configure credentials locally or in your hosting environment rather than committing them.
 
-### Run the Web UI
+All API routes start with `/api` and require an Entra bearer token. The API does not issue tokens through `/auth/token`. In Development mode, [OpenAPI and Scalar are enabled][api-docs]; the launch profile's old `swagger` URL does not correspond to a configured Swagger UI. Development mode also [disables certificate validation for the identity metadata backchannel][development-auth]; production should use the normal validation path.
 
-```bash
-cd web-ui
-npm install   # first time only
-npm run dev
-```
+The older [SecureProducerClient][old-client] expects the removed token endpoint, omits current round/device fields, and has no participation-check step. It also logs original figures and parts of secrets. It is historical reference rather than a supported client for real submissions. [TESTCASES.md](TESTCASES.md) likewise describes earlier request formats and expected outcomes, rather than executed test results. The solution currently has no automated test project.
 
-The UI runs on `http://localhost:3000`. Partners sign in with their organisational Azure AD account; the browser UI runs the full four-phase ML-KEM protocol automatically:
+The implementation links above are pinned to a published commit so the referenced code stays stable. Update them when the documented implementation changes.
 
-1. **Step 1** — Generate an ML-KEM-768 key pair locally and register the encapsulation key
-2. **Step 2** — Automatically encapsulate for every partner with a smaller OID and post the ciphertext
-3. **Step 3** — Poll for incoming ciphertexts and automatically decapsulate each one to derive shared secrets
-4. **Step 4** — Enter actual MAU values per country / month and submit masked values
-
-An **Admin** account can open the Admin Panel to select which registered partners participate in a new epoch, or clear all data to start over.
-
-### Run the Console Demo
-
-```bash
-# Keep the API running in another terminal
-cd AIRoundTableSecretSharingSecureDemo
-dotnet run
-```
-
-## 🔒 Security Analysis
-
-### Why This Implementation Is Secure
-
-The security of this protocol rests on the **IND-CCA2 security of ML-KEM-768**. Given a ciphertext and the corresponding encapsulation key, recovering the shared secret is as hard as solving Module Learning With Errors (MLWE), which is believed to be intractable for both classical and quantum computers.
-
-This means:
-- The aggregator stores ciphertexts and encapsulation keys — it **cannot** recover any shared secret
-- Without the shared secrets, the aggregator **cannot** compute the HMAC-based noise
-- Therefore, the aggregator **cannot** reverse-engineer individual masked values
-
-### Security Guarantees
-
-| Attack Vector | Protection |
-|---------------|------------|
-| Unauthenticated access | Azure Entra ID JWT Bearer; all endpoints require a valid token |
-| Privilege escalation | Group-membership policies (Admin / Partner) enforced by the API |
-| Aggregator tries to recover noise | Needs shared secrets; ML-KEM is IND-CCA2 secure |
-| Aggregator stores ciphertexts | Still cannot decapsulate without the partner's private decapsulation key |
-| Eavesdropper intercepts traffic | Sees only encapsulation keys, ciphertexts, and masked values |
-| Quantum adversary | ML-KEM security is based on MLWE, not factoring or discrete log |
-| N−1 partners collude | Can compute Nth partner's value (inherent to pairwise noise) |
-
-### Limitations
-
-- **All-or-nothing**: Aggregate is only available when all partners submit
-- **Collusion risk**: If N−1 partners share their decapsulation keys, they can recover all shared secrets and deduce the Nth partner's value — inherent to pairwise noise schemes
-- **No submission integrity**: The aggregator cannot verify that submitted values are honest
-- **No dropout tolerance**: If a partner disappears after posting a ciphertext but before submitting, the noise for that pair will not cancel
-
-### Cryptographic Choices
-
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
-| Key Encapsulation | ML-KEM-768 (FIPS 203) | NIST post-quantum standard; IND-CCA2; 128-bit post-quantum security |
-| Runtime | `System.Security.Cryptography.MLKem` (.NET 9+) | Built-in, no external dependency |
-| Noise Derivation | HMAC-SHA256 | Secure PRF; deterministic; context-bound per (country, month) |
-| Key Storage | Encapsulation keys only | Decapsulation keys never leave partners; ciphertexts are opaque to aggregator |
-| Authentication | Azure Entra ID (MSAL / Microsoft Identity Platform) JWT Bearer | Standard enterprise SSO; no per-client secrets; OID claim identifies partner |
-
-## 📚 Related Concepts
-
-- **Secure Multi-Party Computation (MPC)**: Broader field this protocol belongs to
-- **Differential Privacy**: Alternative approach using statistical noise
-- **Secret Sharing (Shamir)**: Related but different technique for splitting secrets
-- **Homomorphic Encryption**: Alternative allowing computation directly on encrypted data
-- **Federated Learning**: Uses similar secure aggregation protocols
-
-## 🧪 Testing with curl
-
-Obtain a token using MSAL device-code flow or from the browser's developer tools, then:
-
-```bash
-TOKEN="<paste-entra-bearer-token>"
-BASE="http://localhost:5149"
-
-# Self-register as a partner (upsert on first login)
-curl -X POST "$BASE/registry/producers/me" \
-  -H "Authorization: Bearer $TOKEN"
-
-# Get current epoch
-curl -H "Authorization: Bearer $TOKEN" "$BASE/registry/epoch"
-
-# Register ML-KEM-768 encapsulation key (1184 bytes, base64)
-curl -X POST "$BASE/keyexchange/register" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"publicKeyBase64": "<BASE64_1184_BYTES>"}'
-
-# Check key registration status
-curl -H "Authorization: Bearer $TOKEN" "$BASE/keyexchange/status"
-
-# Post ciphertext (encapsulating partner → recipient OID)
-curl -X POST "$BASE/ciphertext" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"recipientId": "<partner-oid>", "ciphertextBase64": "<BASE64_1088_BYTES>"}'
-
-# Fetch ciphertexts addressed to the caller
-curl -H "Authorization: Bearer $TOKEN" "$BASE/ciphertext"
-
-# Submit a masked metric (producerId and signature are set from the JWT — omit them)
-curl -X POST "$BASE/metrics/submit" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"country": "US", "month": "2026-06-01", "value": 1230000, "epochId": <epochId>}'
-
-# Get the aggregate (available once all partners have submitted)
-curl -H "Authorization: Bearer $TOKEN" \
-  "$BASE/metrics/aggregate?country=US&month=2026-06-01"
-```
-
-## 📄 License
-
-MIT License — feel free to use for educational purposes.
-
-## 🙏 Acknowledgments
-
-This implementation demonstrates concepts from privacy-preserving data aggregation research. The pairwise noise cancellation technique is a form of secure aggregation similar to protocols used in federated learning systems. Using ML-KEM-768 instead of ECDH makes the protocol resistant to quantum adversaries while preserving the same noise-cancellation guarantees.
+[kem]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingCommon/Core/MlKemKeyExchange.cs#L18-L43
+[masks]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingCommon/Core/SecureNoiseGenerator.cs#L19-L64
+[schema]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingCommon/Models/EpochGrid.cs#L9-L31
+[auth]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Program.cs#L35-L49
+[registration]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/RegistryController.cs#L175-L211
+[keys]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/KeyExchangeController.cs#L67-L117
+[ciphertexts]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/CiphertextController.cs#L37-L109
+[quorum]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/QuorumController.cs#L43-L145
+[quorum-grid]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingCommon/Models/QuorumGrid.cs#L17-L59
+[submission-gate]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/MetricsController.cs#L330-L373
+[results]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/MetricsController.cs#L210-L301
+[admin-results]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Controllers/AdminController.cs#L407-L447
+[startup]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Program.cs#L98-L115
+[api-docs]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Program.cs#L117-L121
+[development-auth]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingAPI/Program.cs#L60-L68
+[old-client]: https://github.com/datapartnership/AIRoundTableSecretSharing/blob/c6384e494cb5477663f82a41e4cfcef99721272c/AIRoundTableSecretSharingCommon/Producers/SecureProducerClient.cs#L40-L65
