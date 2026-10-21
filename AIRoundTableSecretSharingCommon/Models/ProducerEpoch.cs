@@ -12,8 +12,10 @@ public class ProducerEpoch
     public int ProducerCount { get; set; }
     /// <summary>True once every producer has submitted every required country/month cell.</summary>
     public bool IsClosed { get; set; }
-    /// <summary>False while the epoch is in its Quorum Check phase; true once every partner answered.</summary>
-    public bool QuorumComplete { get; set; }
+    [MaxLength(16)]
+    public string UsageType { get; set; } = UsageTypes.Api;
+    /// <summary>The Quorum Check period covering this epoch. Null for epochs created before periods existed.</summary>
+    public int? QuorumPeriodId { get; set; }
     /// <summary>Set when an admin cancels the epoch; a cancelled epoch accepts no further key exchange, quorum or submissions.</summary>
     public DateTime? CancelledAt { get; set; }
     [MaxLength(500)]

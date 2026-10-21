@@ -5,7 +5,7 @@ namespace AIRoundTableSecretSharingAPI.Repositories;
 public interface IProducerRepository
 {
     Task<List<ProducerInfo>> GetActiveProducersAsync(DateTime effectiveDate);
-    Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date);
+    Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date, string usageType = UsageTypes.Api);
     Task<ProducerEpoch?> GetEpochByIdAsync(int epochId);
     Task<List<ProducerEpoch>> GetAllEpochsAsync();
     Task AddProducerAsync(ProducerInfo producer);
@@ -15,7 +15,6 @@ public interface IProducerRepository
     Task CreateEpochAsync(ProducerEpoch epoch);
     Task AddEpochAsync(ProducerEpoch epoch);
     Task CloseEpochAsync(int epochId);
-    Task MarkQuorumCompleteAsync(int epochId);
     Task CancelEpochAsync(int epochId, string? reason, int? replacedByEpochId);
 
     Task ClearAllAsync();

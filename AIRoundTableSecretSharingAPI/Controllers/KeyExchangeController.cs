@@ -25,6 +25,7 @@ public class KeyExchangeController : ControllerBase
     private readonly IProducerRepository _producerRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ISubmissionRepository _submissionRepo;
+    private readonly IQuorumRepository _quorumRepo;
     private readonly ILogger<KeyExchangeController> _logger;
 
     public KeyExchangeController(
@@ -32,14 +33,19 @@ public class KeyExchangeController : ControllerBase
         IProducerRepository producerRepo,
         ICiphertextRepository ciphertextRepo,
         ISubmissionRepository submissionRepo,
+        IQuorumRepository quorumRepo,
         ILogger<KeyExchangeController> logger)
     {
         _keyRepo = keyRepo;
         _producerRepo = producerRepo;
         _ciphertextRepo = ciphertextRepo;
         _submissionRepo = submissionRepo;
+        _quorumRepo = quorumRepo;
         _logger = logger;
     }
+
+    private Task<KeyScope?> ResolveScopeAsync(int? epochId, int? periodId) =>
+        KeyScope.ResolveAsync(epochId, periodId, _producerRepo, _quorumRepo);
 
     private static string? ValidatePublicKey(string? publicKeyBase64)
     {
@@ -75,19 +81,21 @@ public class KeyExchangeController : ControllerBase
         var producerId = User.GetOid();
         if (string.IsNullOrWhiteSpace(producerId))
             return Unauthorized();
-        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId))
-            return BadRequest("EpochId and DeviceId are required.");
-        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
-        if (epoch == null || !epoch.ProducerIds.Contains(producerId))
+        if (string.IsNullOrWhiteSpace(request.DeviceId))
+            return BadRequest("DeviceId is required.");
+        var scope = await ResolveScopeAsync(request.EpochId, request.PeriodId);
+        if (scope == null)
+            return BadRequest("Exactly one of EpochId and PeriodId is required.");
+        if (!scope.ProducerIds.Contains(producerId))
             return Forbid();
-        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+        if (scope.CancelledError is { } cancelled)
             return Conflict(cancelled);
 
         var keyError = ValidatePublicKey(request.PublicKeyBase64);
         if (keyError != null)
             return BadRequest(keyError);
 
-        var existing = await _keyRepo.GetKeyAsync(request.EpochId, producerId, request.DeviceId);
+        var existing = await _keyRepo.GetKeyAsync(scope.Id, producerId, request.DeviceId);
         if (existing != null && existing.PublicKeyBase64 != request.PublicKeyBase64)
         {
             return Conflict(new
@@ -98,7 +106,7 @@ public class KeyExchangeController : ControllerBase
 
         var partnerKey = new PartnerPublicKey
         {
-            EpochId = request.EpochId,
+            EpochId = scope.Id,
             ProducerId = producerId,
             DeviceId = request.DeviceId,
             PublicKeyBase64 = request.PublicKeyBase64,
@@ -107,18 +115,18 @@ public class KeyExchangeController : ControllerBase
 
         await _keyRepo.RegisterKeyAsync(partnerKey);
 
-        var allKeys = await _keyRepo.GetAllKeysAsync(request.EpochId);
+        var allKeys = await _keyRepo.GetAllKeysAsync(scope.Id);
         _logger.LogInformation(
-            "Registered public key for {ProducerId} in epoch {EpochId}. Key exchange possible with {Count} other partners.",
-            producerId, request.EpochId,
+            "Registered public key for {ProducerId} in {Scope}. Key exchange possible with {Count} other partners.",
+            producerId, scope.Label,
             allKeys.Count - 1);
 
         return Ok(new MessageResponse { Message = "Public key registered successfully" });
     }
 
     /// <summary>
-    /// Replace the caller's key for an epoch (on any device) with a new one.
-    /// Only allowed while no ciphertext or submission in the epoch depends on the old key.
+    /// Replace the caller's key for an epoch or period (on any device) with a new one.
+    /// Only allowed while no ciphertext, submission or Quorum Check answer depends on the old key.
     /// </summary>
     [HttpPost("rotate")]
     [Authorize(Policy = "Participant")]
@@ -130,22 +138,25 @@ public class KeyExchangeController : ControllerBase
         var producerId = User.GetOid();
         if (string.IsNullOrWhiteSpace(producerId))
             return Unauthorized();
-        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId))
-            return BadRequest("EpochId and DeviceId are required.");
-        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
-        if (epoch == null || !epoch.ProducerIds.Contains(producerId))
+        if (string.IsNullOrWhiteSpace(request.DeviceId))
+            return BadRequest("DeviceId is required.");
+        var scope = await ResolveScopeAsync(request.EpochId, request.PeriodId);
+        if (scope == null)
+            return BadRequest("Exactly one of EpochId and PeriodId is required.");
+        if (!scope.ProducerIds.Contains(producerId))
             return Forbid();
-        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+        if (scope.CancelledError is { } cancelled)
             return Conflict(cancelled);
 
         var keyError = ValidatePublicKey(request.PublicKeyBase64);
         if (keyError != null)
             return BadRequest(keyError);
 
-        var hasCiphertexts = await _ciphertextRepo.AnyInvolvingAsync(request.EpochId, producerId);
-        var hasSubmissions = !hasCiphertexts
-            && (await _submissionRepo.GetSubmissionsByEpochAsync(request.EpochId)).Count > 0;
-        if (hasCiphertexts || hasSubmissions)
+        var hasCiphertexts = await _ciphertextRepo.AnyInvolvingAsync(scope.Id, producerId);
+        var hasMaskedData = !hasCiphertexts && (request.PeriodId is > 0
+            ? (await _quorumRepo.GetAnswersAsync(request.PeriodId.Value)).Count > 0
+            : (await _submissionRepo.GetSubmissionsByEpochAsync(scope.Id)).Count > 0);
+        if (hasCiphertexts || hasMaskedData)
         {
             return Conflict(new
             {
@@ -156,7 +167,7 @@ public class KeyExchangeController : ControllerBase
 
         await _keyRepo.ReplaceProducerKeyAsync(new PartnerPublicKey
         {
-            EpochId = request.EpochId,
+            EpochId = scope.Id,
             ProducerId = producerId,
             DeviceId = request.DeviceId,
             PublicKeyBase64 = request.PublicKeyBase64,
@@ -164,8 +175,8 @@ public class KeyExchangeController : ControllerBase
         });
 
         _logger.LogWarning(
-            "Rotated public key for {ProducerId} in epoch {EpochId} (device {DeviceId}).",
-            producerId, request.EpochId, request.DeviceId);
+            "Rotated public key for {ProducerId} in {Scope} (device {DeviceId}).",
+            producerId, scope.Label, request.DeviceId);
 
         return Ok(new MessageResponse { Message = "Public key replaced successfully" });
     }
@@ -176,14 +187,15 @@ public class KeyExchangeController : ControllerBase
     /// </summary>
     [HttpGet("keys")]
     [ProducesResponseType(typeof(KeyExchangeResponse), 200)]
-    public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys([FromQuery] int epochId, [FromQuery] string deviceId)
+    public async Task<ActionResult<KeyExchangeResponse>> GetAllPublicKeys(
+        [FromQuery] int? epochId, [FromQuery] int? periodId, [FromQuery] string deviceId)
     {
         var callerId = User.GetOid();
-        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
-        if (callerId == null || epoch == null || !epoch.ProducerIds.Contains(callerId))
+        var scope = await ResolveScopeAsync(epochId, periodId);
+        if (callerId == null || scope == null || !scope.ProducerIds.Contains(callerId))
             return Forbid();
-        var allKeys = await _keyRepo.GetAllKeysAsync(epochId);
-        var epochIds = epoch.ProducerIds.ToHashSet();
+        var allKeys = await _keyRepo.GetAllKeysAsync(scope.Id);
+        var epochIds = scope.ProducerIds.ToHashSet();
 
         var keys = allKeys.Where(k => epochIds.Contains(k.ProducerId) && k.ProducerId != callerId);
 
@@ -192,8 +204,8 @@ public class KeyExchangeController : ControllerBase
             .Select(g => g.OrderByDescending(k => k.RegisteredAt).First())
             .ToList();
         _logger.LogInformation(
-            "Returning {Count} public keys for epoch {EpochId} (excluding: {Excluded})",
-            partnerKeys.Count, epochId, callerId);
+            "Returning {Count} public keys for {Scope} (excluding: {Excluded})",
+            partnerKeys.Count, scope.Label, callerId);
 
         return Ok(new KeyExchangeResponse
         {
@@ -228,31 +240,33 @@ public class KeyExchangeController : ControllerBase
     /// </summary>
     [HttpGet("status")]
     [ProducesResponseType(typeof(KeyExchangeStatusResponse), 200)]
-    public async Task<ActionResult<KeyExchangeStatusResponse>> GetKeyExchangeStatus([FromQuery] int epochId, [FromQuery] string deviceId)
+    public async Task<ActionResult<KeyExchangeStatusResponse>> GetKeyExchangeStatus(
+        [FromQuery] int? epochId, [FromQuery] int? periodId, [FromQuery] string deviceId)
     {
         var callerId = User.GetOid();
         if (callerId == null || string.IsNullOrWhiteSpace(deviceId))
             return Unauthorized();
-        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
-        if (epoch == null || !epoch.ProducerIds.Contains(callerId))
+        var scope = await ResolveScopeAsync(epochId, periodId);
+        if (scope == null || !scope.ProducerIds.Contains(callerId))
             return Forbid();
-        var registeredKeys = await _keyRepo.GetAllKeysAsync(epochId);
+        var scopeId = scope.Id;
+        var registeredKeys = await _keyRepo.GetAllKeysAsync(scopeId);
         var registeredIds = registeredKeys.Select(k => k.ProducerId).ToHashSet();
         var myKey = callerId != null
             ? registeredKeys.FirstOrDefault(k => k.ProducerId == callerId && k.DeviceId == deviceId)
             : null;
 
-        var expectedPartners = epoch?.ProducerIds ?? [];
+        var expectedPartners = scope.ProducerIds;
         var epochRegistered = expectedPartners.Where(p => registeredIds.Contains(p)).ToList();
         var missingKeys = expectedPartners.Where(p => !registeredIds.Contains(p)).ToList();
 
         var n = expectedPartners.Count;
         var expectedCiphertexts = n * (n - 1) / 2;
         var actualCiphertexts = n > 0
-            ? await _ciphertextRepo.CountForPartnersAsync(epochId, expectedPartners)
+            ? await _ciphertextRepo.CountForPartnersAsync(scopeId, expectedPartners)
             : 0;
         var postedSenders = n > 0
-            ? await _ciphertextRepo.GetSenderIdsForPartnersAsync(epochId, expectedPartners)
+            ? await _ciphertextRepo.GetSenderIdsForPartnersAsync(scopeId, expectedPartners)
             : [];
         // Partners who must send at least one ciphertext: those who are NOT the alphabetical minimum
         var sortedPartners = expectedPartners.Order().ToList();

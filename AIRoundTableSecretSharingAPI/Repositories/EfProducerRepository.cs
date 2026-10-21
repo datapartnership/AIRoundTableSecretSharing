@@ -16,9 +16,9 @@ public class EfProducerRepository : IProducerRepository
             .OrderBy(p => p.ProducerId)
             .ToListAsync();
 
-    public Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date) =>
+    public Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date, string usageType = UsageTypes.Api) =>
         _db.Epochs
-            .Where(e => e.CancelledAt == null && e.StartDate <= date && (e.EndDate == null || e.EndDate > date))
+            .Where(e => e.UsageType == usageType && e.CancelledAt == null && e.StartDate <= date && (e.EndDate == null || e.EndDate > date))
             .OrderByDescending(e => e.StartDate)
             .FirstOrDefaultAsync();
 
@@ -69,7 +69,9 @@ public class EfProducerRepository : IProducerRepository
 
     public async Task CreateEpochAsync(ProducerEpoch epoch)
     {
-        var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(e => e.EndDate == null && e.CancelledAt == null);
+        // Each usage type has its own timeline; only that type's open epoch ends
+        var currentEpoch = await _db.Epochs.FirstOrDefaultAsync(
+            e => e.UsageType == epoch.UsageType && e.EndDate == null && e.CancelledAt == null);
         if (currentEpoch != null)
             currentEpoch.EndDate = epoch.StartDate;
 
@@ -97,16 +99,6 @@ public class EfProducerRepository : IProducerRepository
             return;
 
         epoch.IsClosed = true;
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task MarkQuorumCompleteAsync(int epochId)
-    {
-        var epoch = await _db.Epochs.FindAsync(epochId);
-        if (epoch == null || epoch.QuorumComplete)
-            return;
-
-        epoch.QuorumComplete = true;
         await _db.SaveChangesAsync();
     }
 

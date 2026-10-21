@@ -28,6 +28,7 @@ public class CancelEpochRequest
 
 public class ReplaceProducersRequest
 {
+    public string UsageType { get; set; } = UsageTypes.Api;
     public string? StartMonth { get; set; }
     public List<ReplaceProducerItem> Producers { get; set; } = new();
 }
@@ -66,6 +67,8 @@ public class SubmittedEntry
     public string Month { get; set; } = string.Empty;
     public string Indicator { get; set; } = string.Empty;
     public string Segment { get; set; } = string.Empty;
+    /// <summary>Set only in the caller's own submission list.</summary>
+    public DateTime? SubmittedAt { get; set; }
 }
 
 public class ProducerSubmissionsResponse
@@ -87,6 +90,8 @@ public class LatestEpochAggregatesResponse
 public class EpochSummary
 {
     public int EpochId { get; set; }
+    public string UsageType { get; set; } = UsageTypes.Api;
+    public int? QuorumPeriodId { get; set; }
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public int ProducerCount { get; set; }
@@ -100,6 +105,8 @@ public class EpochSummary
     public List<string> ProducerIds { get; set; } = new();
     public bool IsEligible { get; set; }
     public bool CanParticipate => IsEligible && !IsClosed && !IsCancelled;
+    /// <summary>The caller submitted every cell they owe for this epoch.</summary>
+    public bool MySubmissionComplete { get; set; }
 }
 
 public class EpochListResponse
@@ -124,6 +131,8 @@ public class MissingProducerStatus
 public class EpochDetailResponse
 {
     public int EpochId { get; set; }
+    public string UsageType { get; set; } = UsageTypes.Api;
+    public QuorumPeriodSummary? QuorumPeriod { get; set; }
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public int PartnerCount { get; set; }
@@ -146,28 +155,80 @@ public class QuorumPartnerStatus
 {
     public string ProducerId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
-    public int AnsweredCells { get; set; }
+    public int AnsweredMetrics { get; set; }
     public bool Done { get; set; }
 }
 
 public class QuorumCellInfo
 {
     public string Country { get; set; } = string.Empty;
-    public string Month { get; set; } = string.Empty;
     public string Indicator { get; set; } = string.Empty;
-    public string Segment { get; set; } = string.Empty;
     public int ParticipantCount { get; set; }
     public bool Ignored { get; set; }
     public string Signature { get; set; } = string.Empty;
 }
 
+public class QuorumPeriodSummary
+{
+    public QuorumPeriodSummary() { }
+
+    public QuorumPeriodSummary(QuorumPeriod p)
+    {
+        PeriodId = p.PeriodId;
+        UsageType = p.UsageType;
+        StartDate = p.StartDate;
+        EndDate = p.EndDate;
+        ProducerIds = p.ProducerIds;
+        ProducerCount = p.ProducerIds.Count;
+        QuorumComplete = p.QuorumComplete;
+        CreatedAt = p.CreatedAt;
+        CancelledAt = p.CancelledAt;
+        CancelReason = p.CancelReason;
+    }
+
+    public int PeriodId { get; set; }
+    public string UsageType { get; set; } = UsageTypes.Api;
+    public DateTime StartDate { get; set; }
+    /// <summary>Exclusive: the first day after the period.</summary>
+    public DateTime EndDate { get; set; }
+    public List<string> ProducerIds { get; set; } = new();
+    public int ProducerCount { get; set; }
+    public bool QuorumComplete { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancelReason { get; set; }
+    public bool IsCancelled => CancelledAt != null;
+}
+
+public class QuorumMetric
+{
+    public string Country { get; set; } = string.Empty;
+    public string Indicator { get; set; } = string.Empty;
+}
+
 /// <summary>Partner-facing quorum state: progress, plus the metrics that fell below the quorum once it is complete.</summary>
 public class QuorumStatusResponse
 {
-    public int EpochId { get; set; }
+    public string UsageType { get; set; } = UsageTypes.Api;
+    /// <summary>Null when no Quorum Check period covers today.</summary>
+    public QuorumPeriodSummary? Period { get; set; }
+    public bool IsEligible { get; set; }
     public bool QuorumComplete { get; set; }
     public bool MyDone { get; set; }
+    public DateTime? MyAnsweredAt { get; set; }
     public int AnsweredPartners { get; set; }
     public int PartnerCount { get; set; }
-    public List<SubmittedEntry> IgnoredCells { get; set; } = new();
+    public List<QuorumMetric> IgnoredMetrics { get; set; } = new();
+}
+
+public class CreateQuorumPeriodRequest
+{
+    public string UsageType { get; set; } = UsageTypes.Api;
+    public string? StartMonth { get; set; }
+    public List<ReplaceProducerItem> Producers { get; set; } = new();
+}
+
+public class QuorumPeriodListResponse
+{
+    public List<QuorumPeriodSummary> Periods { get; set; } = new();
 }

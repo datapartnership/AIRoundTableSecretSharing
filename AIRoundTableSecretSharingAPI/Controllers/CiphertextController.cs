@@ -22,13 +22,26 @@ public class CiphertextController : ControllerBase
 {
     private readonly ICiphertextRepository _ciphertextRepo;
     private readonly IProducerRepository _producerRepo;
+    private readonly IQuorumRepository _quorumRepo;
     private readonly ILogger<CiphertextController> _logger;
 
-    public CiphertextController(ICiphertextRepository ciphertextRepo, IProducerRepository producerRepo, ILogger<CiphertextController> logger)
+    public CiphertextController(
+        ICiphertextRepository ciphertextRepo,
+        IProducerRepository producerRepo,
+        IQuorumRepository quorumRepo,
+        ILogger<CiphertextController> logger)
     {
         _ciphertextRepo = ciphertextRepo;
         _producerRepo = producerRepo;
+        _quorumRepo = quorumRepo;
         _logger = logger;
+    }
+
+    // A caller outside the scope gets an empty id, which matches no stored ciphertext
+    private async Task<int?> ScopeIdForAsync(int? epochId, int? periodId, string producerId)
+    {
+        var scope = await KeyScope.ResolveAsync(epochId, periodId, _producerRepo, _quorumRepo);
+        return scope != null && scope.ProducerIds.Contains(producerId) ? scope.Id : null;
     }
 
     /// <summary>
@@ -45,13 +58,14 @@ public class CiphertextController : ControllerBase
         var senderId = User.GetOid();
         if (senderId == null)
             return Unauthorized();
-        if (request.EpochId <= 0 || string.IsNullOrWhiteSpace(request.DeviceId) ||
-            string.IsNullOrWhiteSpace(request.RecipientDeviceId))
-            return BadRequest("EpochId, DeviceId, and RecipientDeviceId are required.");
-        var epoch = await _producerRepo.GetEpochByIdAsync(request.EpochId);
-        if (epoch == null || !epoch.ProducerIds.Contains(senderId) || !epoch.ProducerIds.Contains(request.RecipientId))
+        if (string.IsNullOrWhiteSpace(request.DeviceId) || string.IsNullOrWhiteSpace(request.RecipientDeviceId))
+            return BadRequest("DeviceId and RecipientDeviceId are required.");
+        var scope = await KeyScope.ResolveAsync(request.EpochId, request.PeriodId, _producerRepo, _quorumRepo);
+        if (scope == null)
+            return BadRequest("Exactly one of EpochId and PeriodId is required.");
+        if (!scope.ProducerIds.Contains(senderId) || !scope.ProducerIds.Contains(request.RecipientId))
             return Forbid();
-        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+        if (scope.CancelledError is { } cancelled)
             return Conflict(cancelled);
 
         if (string.IsNullOrEmpty(request.RecipientId) ||
@@ -74,7 +88,7 @@ public class CiphertextController : ControllerBase
         }
 
         var existing = await _ciphertextRepo.GetAsync(
-            request.EpochId, senderId, request.DeviceId, request.RecipientId, request.RecipientDeviceId);
+            scope.Id, senderId, request.DeviceId, request.RecipientId, request.RecipientDeviceId);
         if (existing != null)
         {
             if (existing.CiphertextBase64 == request.CiphertextBase64)
@@ -88,7 +102,7 @@ public class CiphertextController : ControllerBase
 
         var ct = new PartnerCiphertext
         {
-            EpochId = request.EpochId,
+            EpochId = scope.Id,
             SenderId = senderId,
             SenderDeviceId = request.DeviceId,
             RecipientId = request.RecipientId,
@@ -112,13 +126,16 @@ public class CiphertextController : ControllerBase
     [HttpGet("sent")]
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
     [ProducesResponseType(401)]
-    public async Task<ActionResult<CiphertextResponse>> GetSentCiphertexts([FromQuery] int epochId, [FromQuery] string deviceId)
+    public async Task<ActionResult<CiphertextResponse>> GetSentCiphertexts(
+        [FromQuery] int? epochId, [FromQuery] int? periodId, [FromQuery] string deviceId)
     {
         var senderId = User.GetOid();
         if (string.IsNullOrEmpty(senderId))
             return Unauthorized();
 
-        var ciphertexts = await _ciphertextRepo.GetForSenderAsync(epochId, senderId, deviceId);
+        if (await ScopeIdForAsync(epochId, periodId, senderId) is not { } scopeId)
+            return Forbid();
+        var ciphertexts = await _ciphertextRepo.GetForSenderAsync(scopeId, senderId, deviceId);
         return Ok(new CiphertextResponse { Ciphertexts = ciphertexts });
     }
 
@@ -129,7 +146,8 @@ public class CiphertextController : ControllerBase
     [ProducesResponseType(typeof(CiphertextResponse), 200)]
     [ProducesResponseType(401)]
     [ProducesResponseType(403)]
-    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts([FromQuery] int epochId, [FromQuery] string deviceId, [FromQuery] string? recipientId = null)
+    public async Task<ActionResult<CiphertextResponse>> GetCiphertexts(
+        [FromQuery] int? epochId, [FromQuery] int? periodId, [FromQuery] string deviceId, [FromQuery] string? recipientId = null)
     {
         var oid = User.GetOid();
         if (string.IsNullOrEmpty(oid))
@@ -138,7 +156,9 @@ public class CiphertextController : ControllerBase
         if (!string.IsNullOrEmpty(recipientId) && recipientId != oid)
             return Forbid();
 
-        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(epochId, oid, deviceId);
+        if (await ScopeIdForAsync(epochId, periodId, oid) is not { } scopeId)
+            return Forbid();
+        var ciphertexts = await _ciphertextRepo.GetForRecipientAsync(scopeId, oid, deviceId);
 
         _logger.LogInformation(
             "Returning {Count} ciphertext(s) for {Recipient}.",

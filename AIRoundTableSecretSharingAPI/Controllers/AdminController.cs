@@ -75,11 +75,26 @@ public class AdminController : ControllerBase
     [ProducesResponseType(400)]
     public async Task<ActionResult<ReplaceProducersResponse>> ResetAndCreateEpoch([FromBody] ReplaceProducersRequest request)
     {
+        if (!UsageTypes.IsValid(request.UsageType))
+            return BadRequest(new { error = "usageType must be api or chat." });
+
         if (request.Producers == null || request.Producers.Count < EpochLifecycle.MinParticipants)
             return BadRequest(new { error = $"At least {EpochLifecycle.MinParticipants} producers are required." });
 
         if (!TryResolveEpochStartDate(request.StartMonth, out var startDate))
             return BadRequest(new { error = "startMonth must be in YYYY-MM format (e.g. 2025-01)." });
+
+        // Every epoch belongs to a Quorum Check period of its usage type and has the period's partners
+        var period = (await _quorumRepo.GetAllPeriodsAsync())
+            .FirstOrDefault(p => p.UsageType == request.UsageType && !p.IsCancelled && p.Covers(startDate));
+        if (period == null)
+        {
+            return BadRequest(new
+            {
+                error = $"No Quorum Check period of this usage type covers the epoch's {EpochGrid.MonthCount} months. Create the period first.",
+                code = "no-period"
+            });
+        }
 
         var normalizedProducers = request.Producers
             .Select(p => new ReplaceProducerItem
@@ -101,6 +116,17 @@ public class AdminController : ControllerBase
 
         if (duplicateIds.Count > 0)
             return BadRequest(new { error = "Duplicate producerId values are not allowed.", duplicateProducerIds = duplicateIds });
+
+        var periodIds = period.ProducerIds.ToHashSet(StringComparer.Ordinal);
+        if (normalizedProducers.Count != periodIds.Count || normalizedProducers.Any(p => !periodIds.Contains(p.ProducerId)))
+        {
+            return BadRequest(new
+            {
+                error = $"The epoch's partners must be exactly the partners of Quorum Check period {period.PeriodId}.",
+                code = "partners-differ-from-period",
+                periodProducerIds = period.ProducerIds
+            });
+        }
 
         var callerId = User.GetOid();
         if (callerId != null && normalizedProducers.Any(p => p.ProducerId == callerId))
@@ -140,12 +166,13 @@ public class AdminController : ControllerBase
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
 
-            var epoch = await NewEpochAsync(startDate, sortedProducerIds);
+            var epoch = await NewEpochAsync(startDate, sortedProducerIds, request.UsageType, period.PeriodId);
             await _producerRepo.CreateEpochAsync(epoch);
             await tx.CommitAsync();
 
             _logger.LogInformation(
-                "Created epoch {EpochId} effective {StartDate} with {Count} producers. Previous epochs kept.",
+                "Created {UsageType} epoch {EpochId} effective {StartDate} with {Count} producers. Previous epochs kept.",
+                epoch.UsageType,
                 epoch.EpochId,
                 epoch.StartDate,
                 epoch.ProducerCount);
@@ -185,7 +212,7 @@ public class AdminController : ControllerBase
         await _producerRepo.CancelEpochAsync(epochId, NormalizeReason(request?.Reason), null);
 
         _logger.LogWarning("Epoch {EpochId} cancelled by {User}", epochId, User.Identity?.Name ?? "unknown");
-        return Ok(ToSummary((await _producerRepo.GetEpochByIdAsync(epochId))!));
+        return Ok(await ToSummaryAsync((await _producerRepo.GetEpochByIdAsync(epochId))!));
     }
 
     /// <summary>
@@ -220,7 +247,8 @@ public class AdminController : ControllerBase
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            var epoch = await NewEpochAsync(old.StartDate, old.ProducerIds.OrderBy(id => id, StringComparer.Ordinal).ToList());
+            var epoch = await NewEpochAsync(
+                old.StartDate, old.ProducerIds.OrderBy(id => id, StringComparer.Ordinal).ToList(), old.UsageType, old.QuorumPeriodId);
             // Keep the replaced epoch's place in the timeline instead of ending whichever epoch is current
             epoch.EndDate = old.EndDate;
             await _producerRepo.AddEpochAsync(epoch);
@@ -245,19 +273,110 @@ public class AdminController : ControllerBase
         }
     }
 
-    private async Task<ProducerEpoch> NewEpochAsync(DateTime startDate, List<string> sortedProducerIds)
+    private async Task<ProducerEpoch> NewEpochAsync(DateTime startDate, List<string> sortedProducerIds, string usageType, int? periodId)
     {
         var existingEpochIds = (await _producerRepo.GetAllEpochsAsync()).Select(e => e.EpochId);
         return new ProducerEpoch
         {
             EpochId = existingEpochIds.DefaultIfEmpty(0).Max() + 1,
+            UsageType = usageType,
+            QuorumPeriodId = periodId,
             StartDate = startDate,
             EndDate = null,
             ProducerIds = sortedProducerIds,
             ProducerCount = sortedProducerIds.Count,
-            IsClosed = false,
-            QuorumComplete = false
+            IsClosed = false
         };
+    }
+
+    /// <summary>
+    /// Opens a Quorum Check period: one check covering every epoch of a usage type for 12 months.
+    /// Its partners are the partners of every epoch created in it.
+    /// </summary>
+    [HttpPost("quorum-periods")]
+    [ProducesResponseType(typeof(QuorumPeriodSummary), 200)]
+    [ProducesResponseType(400)]
+    public async Task<ActionResult<QuorumPeriodSummary>> CreateQuorumPeriod([FromBody] CreateQuorumPeriodRequest request)
+    {
+        if (!UsageTypes.IsValid(request.UsageType))
+            return BadRequest(new { error = "usageType must be api or chat." });
+        if (!TryResolveEpochStartDate(request.StartMonth, out var startDate))
+            return BadRequest(new { error = "startMonth must be in YYYY-MM format (e.g. 2025-01)." });
+
+        var ids = (request.Producers ?? new())
+            .Select(p => p.ProducerId.Trim())
+            .Where(id => id.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        if (ids.Count < EpochLifecycle.MinParticipants)
+            return BadRequest(new { error = $"At least {EpochLifecycle.MinParticipants} producers are required." });
+
+        var callerId = User.GetOid();
+        if (callerId != null && ids.Contains(callerId))
+            return BadRequest(new { error = "Admins cannot be participants." });
+
+        var unregisteredIds = await UnregisteredProducerIdsAsync(ids);
+        if (unregisteredIds.Count > 0)
+            return BadRequest(new { error = "Every producer must be an active registered partner.", unregisteredProducerIds = unregisteredIds });
+
+        var periods = await _quorumRepo.GetAllPeriodsAsync();
+        var end = startDate.AddMonths(QuorumPeriod.MonthCount);
+        var overlap = periods.FirstOrDefault(p => p.UsageType == request.UsageType && !p.IsCancelled
+                                                  && p.StartDate < end && startDate < p.EndDate);
+        if (overlap != null)
+        {
+            return BadRequest(new
+            {
+                error = $"Quorum Check period {overlap.PeriodId} already covers part of these months. Cancel it first.",
+                code = "period-overlap"
+            });
+        }
+
+        var period = new QuorumPeriod
+        {
+            PeriodId = periods.Select(p => p.PeriodId).DefaultIfEmpty(0).Max() + 1,
+            UsageType = request.UsageType,
+            StartDate = startDate,
+            ProducerIds = ids,
+            CreatedAt = DateTime.UtcNow
+        };
+        await _quorumRepo.AddPeriodAsync(period);
+
+        _logger.LogInformation(
+            "Created {UsageType} Quorum Check period {PeriodId} from {StartDate} with {Count} producers",
+            period.UsageType, period.PeriodId, period.StartDate, ids.Count);
+        return Ok(new QuorumPeriodSummary(period));
+    }
+
+    [HttpGet("quorum-periods")]
+    [ProducesResponseType(typeof(QuorumPeriodListResponse), 200)]
+    public async Task<ActionResult<QuorumPeriodListResponse>> GetQuorumPeriods()
+    {
+        var periods = await _quorumRepo.GetAllPeriodsAsync();
+        foreach (var p in periods)
+            await EpochLifecycle.CompletePeriodIfAnsweredAsync(p, _quorumRepo);
+        return Ok(new QuorumPeriodListResponse { Periods = periods.Select(p => new QuorumPeriodSummary(p)).ToList() });
+    }
+
+    /// <summary>
+    /// Cancels a Quorum Check period. Its epochs keep the answers already given; no new epochs can be created in it.
+    /// </summary>
+    [HttpPost("quorum-periods/{periodId:int}/cancel")]
+    [ProducesResponseType(typeof(QuorumPeriodSummary), 200)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<ActionResult<QuorumPeriodSummary>> CancelQuorumPeriod(int periodId, [FromBody] CancelEpochRequest? request)
+    {
+        var period = await _quorumRepo.GetPeriodAsync(periodId);
+        if (period == null)
+            return NotFound(new { error = "Quorum Check period not found" });
+        if (period.IsCancelled)
+            return Conflict(new { error = "This period is already cancelled.", code = "already-cancelled" });
+
+        await _quorumRepo.CancelPeriodAsync(periodId, NormalizeReason(request?.Reason));
+        _logger.LogWarning("Quorum Check period {PeriodId} cancelled by {User}", periodId, User.Identity?.Name ?? "unknown");
+        return Ok(new QuorumPeriodSummary((await _quorumRepo.GetPeriodAsync(periodId))!));
     }
 
     // Admins are refused at self-registration, so requiring an active registration excludes them
@@ -278,14 +397,16 @@ public class AdminController : ControllerBase
         return trimmed.Length > 500 ? trimmed[..500] : trimmed;
     }
 
-    private static EpochSummary ToSummary(ProducerEpoch e) => new()
+    private async Task<EpochSummary> ToSummaryAsync(ProducerEpoch e) => new()
     {
         EpochId = e.EpochId,
+        UsageType = e.UsageType,
+        QuorumPeriodId = e.QuorumPeriodId,
         StartDate = e.StartDate,
         EndDate = e.EndDate,
         ProducerCount = e.ProducerCount,
         IsClosed = e.IsClosed,
-        QuorumComplete = e.QuorumComplete,
+        QuorumComplete = await EpochLifecycle.IsQuorumCompleteAsync(e, _quorumRepo),
         CancelledAt = e.CancelledAt,
         CancelReason = e.CancelReason,
         ReplacedByEpochId = e.ReplacedByEpochId
@@ -331,10 +452,10 @@ public class AdminController : ControllerBase
     public async Task<ActionResult<EpochListResponse>> GetEpochs()
     {
         var epochs = await _producerRepo.GetAllEpochsAsync();
-        return Ok(new EpochListResponse
-        {
-            Epochs = epochs.Select(ToSummary).ToList()
-        });
+        var summaries = new List<EpochSummary>();
+        foreach (var e in epochs)
+            summaries.Add(await ToSummaryAsync(e));
+        return Ok(new EpochListResponse { Epochs = summaries });
     }
 
     /// <summary>
@@ -349,7 +470,6 @@ public class AdminController : ControllerBase
         if (epoch == null)
             return NotFound(new { error = "Epoch not found" });
 
-        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
@@ -361,16 +481,15 @@ public class AdminController : ControllerBase
     [HttpGet("aggregates-latest-epoch")]
     [ProducesResponseType(typeof(EpochDetailResponse), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<EpochDetailResponse>> GetLatestEpochAggregates()
+    public async Task<ActionResult<EpochDetailResponse>> GetLatestEpochAggregates([FromQuery] string usageType = UsageTypes.Api)
     {
-        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
+        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow, usageType);
         if (epoch == null)
         {
             _logger.LogWarning("No active epoch found for current date.");
             return NotFound(new { error = "No active epoch found" });
         }
 
-        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         return Ok(await BuildEpochDetailAsync(epoch));
     }
@@ -378,10 +497,14 @@ public class AdminController : ControllerBase
     private async Task<EpochDetailResponse> BuildEpochDetailAsync(ProducerEpoch epoch)
     {
         var submissions = await _submissionRepo.GetSubmissionsByEpochAsync(epoch.EpochId);
-        var quorumResponses = await _quorumRepo.GetByEpochAsync(epoch.EpochId);
-        var quorumCells = QuorumGrid.Evaluate(epoch, quorumResponses);
-        var ignoredKeys = epoch.QuorumComplete
-            ? quorumCells.Where(c => c.Ignored).Select(c => EpochGrid.CellKey(c.Country, c.Month, c.Indicator, c.Segment)).ToHashSet(StringComparer.Ordinal)
+        var period = await EpochLifecycle.PeriodOfAsync(epoch, _quorumRepo);
+        if (period != null)
+            await EpochLifecycle.CompletePeriodIfAnsweredAsync(period, _quorumRepo);
+        var quorumAnswers = period != null ? await _quorumRepo.GetAnswersAsync(period.PeriodId) : new List<QuorumAnswer>();
+        var quorumCells = period != null ? QuorumGrid.Evaluate(period, quorumAnswers) : new List<QuorumCellResult>();
+        var quorumComplete = period?.QuorumComplete ?? true;
+        var ignoredKeys = quorumComplete
+            ? QuorumGrid.IgnoredCellKeys(epoch, quorumCells)
             : new HashSet<string>(StringComparer.Ordinal);
         // Cells below quorum get no data, so they are never missing
         var missingCells = EpochGrid.MissingCells(epoch, submissions, ignoredKeys);
@@ -410,12 +533,12 @@ public class AdminController : ControllerBase
             })
             .ToList();
 
-        var answered = quorumResponses
-            .GroupBy(r => r.ProducerId)
-            .ToDictionary(g => g.Key, g => g.Select(r => EpochGrid.CellKey(r.Country, r.Month, r.Indicator, r.Segment)).Distinct().Count());
+        var answered = period != null
+            ? QuorumGrid.AnsweredCounts(period, quorumAnswers)
+            : new Dictionary<string, int>();
 
         var aggregates = new List<AggregationResult>();
-        if (missingCells.Count == 0 && epoch.ProducerIds.Count > 0)
+        if (quorumComplete && missingCells.Count == 0 && epoch.ProducerIds.Count > 0)
         {
             foreach (var country in EpochGrid.Countries)
             {
@@ -454,32 +577,32 @@ public class AdminController : ControllerBase
         return new EpochDetailResponse
         {
             EpochId = epoch.EpochId,
+            UsageType = epoch.UsageType,
+            QuorumPeriod = period != null ? new QuorumPeriodSummary(period) : null,
             StartDate = epoch.StartDate,
             EndDate = epoch.EndDate,
             PartnerCount = epoch.ProducerCount,
             IsClosed = epoch.IsClosed,
-            QuorumComplete = epoch.QuorumComplete,
+            QuorumComplete = quorumComplete,
             CancelledAt = epoch.CancelledAt,
             CancelReason = epoch.CancelReason,
             ReplacedByEpochId = epoch.ReplacedByEpochId,
             Partners = partners,
-            QuorumPartners = epoch.ProducerIds.Select(id =>
+            QuorumPartners = period == null ? new() : period.ProducerIds.Select(id =>
             {
                 var n = answered.GetValueOrDefault(id);
                 return new QuorumPartnerStatus
                 {
                     ProducerId = id,
                     DisplayName = NameOf(id),
-                    AnsweredCells = n,
-                    Done = n >= EpochGrid.CellCount
+                    AnsweredMetrics = n,
+                    Done = n >= QuorumGrid.CellCount
                 };
             }).ToList(),
             QuorumCells = quorumCells.Select(c => new QuorumCellInfo
             {
                 Country = c.Country,
-                Month = c.Month,
                 Indicator = c.Indicator,
-                Segment = c.Segment,
                 ParticipantCount = c.ParticipantCount,
                 Ignored = c.Ignored,
                 Signature = c.Signature

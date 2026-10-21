@@ -6,6 +6,7 @@ namespace AIRoundTableSecretSharingCommon.Models;
 /// </summary>
 public class PartnerPublicKey
 {
+    /// <summary>Key-exchange scope: the epoch id, or the negated Quorum Check period id.</summary>
     public int EpochId { get; set; }
     public string ProducerId { get; set; } = string.Empty;
     public string DeviceId { get; set; } = string.Empty;
@@ -24,7 +25,9 @@ public class PartnerPublicKey
 /// </summary>
 public class RegisterKeyRequest
 {
+    /// <summary>Set exactly one of EpochId and PeriodId.</summary>
     public int EpochId { get; set; }
+    public int? PeriodId { get; set; }
     public string ProducerId { get; set; } = string.Empty;
     public string DeviceId { get; set; } = string.Empty;
     public string PublicKeyBase64 { get; set; } = string.Empty;
@@ -46,6 +49,7 @@ public class KeyExchangeResponse
 /// </summary>
 public class PartnerCiphertext
 {
+    /// <summary>Key-exchange scope: the epoch id, or the negated Quorum Check period id.</summary>
     public int EpochId { get; set; }
     public string SenderId { get; set; } = string.Empty;
     public string SenderDeviceId { get; set; } = string.Empty;
@@ -65,7 +69,9 @@ public class PartnerCiphertext
 /// </summary>
 public class StoreCiphertextRequest
 {
+    /// <summary>Set exactly one of EpochId and PeriodId.</summary>
     public int EpochId { get; set; }
+    public int? PeriodId { get; set; }
     public string DeviceId { get; set; } = string.Empty;
     public string SenderId { get; set; } = string.Empty;
     public string RecipientId { get; set; } = string.Empty;

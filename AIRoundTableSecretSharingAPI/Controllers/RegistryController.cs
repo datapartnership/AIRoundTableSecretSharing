@@ -55,10 +55,13 @@ public class RegistryController : ControllerBase
     [HttpGet("epoch")]
     [ProducesResponseType(typeof(ProducerEpoch), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<ProducerEpoch>> GetEpoch([FromQuery] DateTime? date = null)
+    public async Task<ActionResult<ProducerEpoch>> GetEpoch([FromQuery] DateTime? date = null, [FromQuery] string usageType = UsageTypes.Api)
     {
+        if (!UsageTypes.IsValid(usageType))
+            return BadRequest(new { error = "usageType must be api or chat" });
+
         var effectiveDate = date ?? DateTime.UtcNow;
-        var epoch = await _producerRepo.GetEpochForDateAsync(effectiveDate);
+        var epoch = await _producerRepo.GetEpochForDateAsync(effectiveDate, usageType);
 
         if (epoch == null)
             return NotFound("No epoch found for date");
@@ -88,31 +91,49 @@ public class RegistryController : ControllerBase
         }
 
         var now = DateTime.UtcNow;
-        var epochs = await _producerRepo.GetAllEpochsAsync();
-        return Ok(new EpochListResponse
+        var epochs = (await _producerRepo.GetAllEpochsAsync())
+            .Where(e => e.IsCancelled
+                // Participants keep seeing a cancelled epoch for a while so they learn why it stopped
+                ? e.ProducerIds.Contains(producerId) && e.CancelledAt > now.AddDays(-CancelledEpochVisibleDays)
+                // Closed epochs stay listed for their participants as history
+                : e.IsClosed ? e.ProducerIds.Contains(producerId) : e.EndDate == null || e.EndDate > now)
+            .OrderBy(e => e.IsCancelled)
+            .ToList();
+
+        var summaries = new List<EpochSummary>();
+        foreach (var e in epochs)
         {
-            Epochs = epochs
-                .Where(e => e.IsCancelled
-                    // Participants keep seeing a cancelled epoch for a while so they learn why it stopped
-                    ? e.ProducerIds.Contains(producerId) && e.CancelledAt > now.AddDays(-CancelledEpochVisibleDays)
-                    : !e.IsClosed && (e.EndDate == null || e.EndDate > now))
-                .OrderBy(e => e.IsCancelled)
-                .Select(e => new EpochSummary
-                {
-                    EpochId = e.EpochId,
-                    StartDate = e.StartDate,
-                    EndDate = e.EndDate,
-                    ProducerCount = e.ProducerCount,
-                    IsClosed = e.IsClosed,
-                    QuorumComplete = e.QuorumComplete,
-                    CancelledAt = e.CancelledAt,
-                    CancelReason = e.CancelReason,
-                    ReplacedByEpochId = e.ReplacedByEpochId,
-                    ProducerIds = e.ProducerIds,
-                    IsEligible = e.ProducerIds.Contains(producerId)
-                })
-                .ToList()
-        });
+            var isEligible = e.ProducerIds.Contains(producerId);
+            summaries.Add(new EpochSummary
+            {
+                EpochId = e.EpochId,
+                UsageType = e.UsageType,
+                QuorumPeriodId = e.QuorumPeriodId,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                ProducerCount = e.ProducerCount,
+                IsClosed = e.IsClosed,
+                QuorumComplete = await EpochLifecycle.IsQuorumCompleteAsync(e, _quorumRepo),
+                CancelledAt = e.CancelledAt,
+                CancelReason = e.CancelReason,
+                ReplacedByEpochId = e.ReplacedByEpochId,
+                ProducerIds = e.ProducerIds,
+                IsEligible = isEligible,
+                MySubmissionComplete = isEligible && !e.IsCancelled && await MySubmissionCompleteAsync(e, producerId)
+            });
+        }
+        return Ok(new EpochListResponse { Epochs = summaries });
+    }
+
+    private async Task<bool> MySubmissionCompleteAsync(ProducerEpoch epoch, string producerId)
+    {
+        if (epoch.IsClosed)
+            return true;
+        var mine = await _submissionRepo.GetSubmissionsByProducerAsync(producerId, epoch.EpochId);
+        if (mine.Count == 0)
+            return false;
+        var ignored = await EpochLifecycle.IgnoredKeysAsync(epoch, _quorumRepo);
+        return !EpochGrid.MissingCells(epoch, mine, ignored).Any(m => m.ProducerId == producerId);
     }
 
     [HttpPost("producers")]

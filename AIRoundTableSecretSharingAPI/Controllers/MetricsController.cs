@@ -53,7 +53,7 @@ public class MetricsController : ControllerBase
         if (prepared.Error is { } fieldError)
             return fieldError;
 
-        var gate = await GateEpochForSubmitAsync(prepared.MonthDate, submission.EpochId, producerId);
+        var gate = await GateEpochForSubmitAsync(submission.EpochId, producerId);
         if (gate.Error is { } gateError)
             return gateError;
 
@@ -105,7 +105,6 @@ public class MetricsController : ControllerBase
 
         var producerId = User.GetOid()!;
         var now = DateTime.UtcNow;
-        DateTime? monthDate = null;
         int? epochId = null;
         var batchKeys = new HashSet<string>(StringComparer.Ordinal);
 
@@ -117,9 +116,8 @@ public class MetricsController : ControllerBase
 
             submission.SubmittedAt = now;
 
-            if (monthDate == null)
+            if (epochId == null)
             {
-                monthDate = prepared.MonthDate;
                 epochId = submission.EpochId;
             }
             else if (submission.EpochId != epochId)
@@ -132,7 +130,7 @@ public class MetricsController : ControllerBase
                 return BadRequest(new { error = $"Duplicate cell in batch: {key}" });
         }
 
-        var gate = await GateEpochForSubmitAsync(monthDate!.Value, epochId!.Value, producerId);
+        var gate = await GateEpochForSubmitAsync(epochId!.Value, producerId);
         if (gate.Error is { } gateError)
             return gateError;
 
@@ -187,14 +185,16 @@ public class MetricsController : ControllerBase
     [HttpGet("mysubmissions")]
     [ProducesResponseType(typeof(ProducerSubmissionsResponse), 200)]
     [ProducesResponseType(401)]
-    public async Task<ActionResult<ProducerSubmissionsResponse>> GetMySubmissions()
+    public async Task<ActionResult<ProducerSubmissionsResponse>> GetMySubmissions([FromQuery] int? epochId = null)
     {
         var producerId = User.GetOid();
 
         if (string.IsNullOrEmpty(producerId))
             return Unauthorized();
 
-        var epoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
+        var epoch = epochId is > 0
+            ? await _producerRepo.GetEpochByIdAsync(epochId.Value)
+            : await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
         if (epoch == null)
             return Ok(new ProducerSubmissionsResponse { EpochId = 0, Submissions = [] });
 
@@ -209,7 +209,8 @@ public class MetricsController : ControllerBase
                     Country = s.Country,
                     Month = s.Month,
                     Indicator = s.Indicator,
-                    Segment = s.Segment
+                    Segment = s.Segment,
+                    SubmittedAt = s.SubmittedAt
                 })
                 .ToList()
         });
@@ -224,8 +225,12 @@ public class MetricsController : ControllerBase
         [FromQuery] string country,
         [FromQuery] string month,
         [FromQuery] string indicator,
-        [FromQuery] string segment)
+        [FromQuery] string segment,
+        [FromQuery] string usageType = UsageTypes.Api)
     {
+        if (!UsageTypes.IsValid(usageType))
+            return BadRequest(new { error = "usageType must be api or chat" });
+
         if (string.IsNullOrEmpty(month) || !MonthRegex.IsMatch(month))
             return BadRequest(new { error = "month must be in YYYY-MM format (e.g. 2025-01)" });
 
@@ -237,14 +242,13 @@ public class MetricsController : ControllerBase
         }
 
         var monthDate = DateTime.ParseExact(month, "yyyy-MM", CultureInfo.InvariantCulture);
-        var epoch = await _producerRepo.GetEpochForDateAsync(monthDate);
+        var epoch = await _producerRepo.GetEpochForDateAsync(monthDate, usageType);
 
         if (epoch == null)
             return NotFound("No epoch for date");
 
-        var quorumCell = QuorumGrid.Evaluate(epoch, await _quorumRepo.GetByEpochAsync(epoch.EpochId))
-            .FirstOrDefault(c => c.Country == country && c.Month == month && c.Indicator == indicator && c.Segment == segment);
-        if (epoch.QuorumComplete && quorumCell is { Ignored: true })
+        var ignored = await EpochLifecycle.IgnoredKeysAsync(epoch, _quorumRepo);
+        if (ignored.Contains(EpochGrid.CellKey(country, month, indicator, segment)))
         {
             return Ok(new AggregationResult
             {
@@ -318,7 +322,7 @@ public class MetricsController : ControllerBase
             segment = submission.Segment
         });
 
-    private sealed record PreparedSubmission(DateTime MonthDate, ActionResult? Error);
+    private sealed record PreparedSubmission(ActionResult? Error);
 
     private PreparedSubmission PrepareSubmission(MetricSubmission submission, string producerId)
     {
@@ -330,38 +334,30 @@ public class MetricsController : ControllerBase
         submission.SubmittedAt = DateTime.UtcNow;
 
         if (!MonthRegex.IsMatch(submission.Month))
-            return new PreparedSubmission(default, BadRequest(new { error = "Month must be in YYYY-MM format (e.g. 2025-01)" }));
+            return new PreparedSubmission(BadRequest(new { error = "Month must be in YYYY-MM format (e.g. 2025-01)" }));
 
         if (string.IsNullOrEmpty(submission.Country) ||
             string.IsNullOrEmpty(submission.Indicator) ||
             string.IsNullOrEmpty(submission.Segment))
         {
-            return new PreparedSubmission(default, BadRequest(new { error = "country, indicator, and segment are required" }));
+            return new PreparedSubmission(BadRequest(new { error = "country, indicator, and segment are required" }));
         }
 
-        var monthDate = DateTime.ParseExact(submission.Month, "yyyy-MM", CultureInfo.InvariantCulture);
-        return new PreparedSubmission(monthDate, null);
+        return new PreparedSubmission(null);
     }
 
     private sealed record EpochGate(ProducerEpoch? Epoch, ActionResult? Error);
 
-    private async Task<EpochGate> GateEpochForSubmitAsync(DateTime monthDate, int submittedEpochId, string producerId)
+    private async Task<EpochGate> GateEpochForSubmitAsync(int submittedEpochId, string producerId)
     {
-        var epoch = await _producerRepo.GetEpochForDateAsync(monthDate);
-        if (epoch == null || epoch.EpochId != submittedEpochId)
-        {
-            // Cancelled epochs never match by date; tell the partner why instead of "Invalid epoch"
-            if (await _producerRepo.GetEpochByIdAsync(submittedEpochId) is { } submitted
-                && EpochLifecycle.CancelledError(submitted) is { } cancelled)
-                return new EpochGate(null, Conflict(cancelled));
+        // Epochs of both usage types overlap in time, so the epoch is found by id; the grid check
+        // then rejects months outside it
+        var epoch = await _producerRepo.GetEpochByIdAsync(submittedEpochId);
+        if (epoch == null)
+            return new EpochGate(null, BadRequest(new { error = "Invalid epoch", submittedEpoch = submittedEpochId }));
 
-            return new EpochGate(null, BadRequest(new
-            {
-                error = "Invalid epoch",
-                expectedEpoch = epoch?.EpochId,
-                submittedEpoch = submittedEpochId
-            }));
-        }
+        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+            return new EpochGate(null, Conflict(cancelled));
 
         if (!epoch.ProducerIds.Contains(producerId))
         {
@@ -376,15 +372,14 @@ public class MetricsController : ControllerBase
         if (epoch.IsClosed)
             return new EpochGate(null, BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId }));
 
-        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
-        if (!epoch.QuorumComplete)
-            return new EpochGate(null, UnprocessableEntity(new { error = "Quorum Check is not complete", epochId = epoch.EpochId }));
+        if (!await EpochLifecycle.IsQuorumCompleteAsync(epoch, _quorumRepo))
+            return new EpochGate(null, Conflict(new { error = "The Quorum Check for this period is not complete", code = "quorum-pending", epochId = epoch.EpochId }));
 
         await EpochLifecycle.CloseIfCompleteAsync(epoch, _submissionRepo, _producerRepo, _quorumRepo);
         if (epoch.IsClosed)
             return new EpochGate(null, BadRequest(new { error = "Epoch is closed", epochId = epoch.EpochId }));
 
-        if (await EpochLifecycle.KeyExchangeErrorAsync(epoch, _keyRepo, _ciphertextRepo) is { } keyError)
+        if (await EpochLifecycle.KeyExchangeErrorAsync(epoch.EpochId, epoch.ProducerIds, _keyRepo, _ciphertextRepo) is { } keyError)
             return new EpochGate(null, UnprocessableEntity(keyError));
 
         return new EpochGate(epoch, null);

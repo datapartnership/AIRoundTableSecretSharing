@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingAPI.Repositories;
 using AIRoundTableSecretSharingAPI.Services;
@@ -10,8 +8,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace AIRoundTableSecretSharingAPI.Controllers;
 
 /// <summary>
-/// Quorum Check: before submissions, partners declare per metric cell whether they will
-/// participate (1) or not (0). Answers are masked with the pairwise key-exchange noise, so the server
+/// Quorum Check: once per period and usage type, partners declare per country and indicator whether they will
+/// report it (1) or not (0). Answers are masked with the period's pairwise key-exchange noise, so the server
 /// only learns per-metric totals (participant count and a composition fingerprint).
 /// </summary>
 [ApiController]
@@ -19,143 +17,148 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 [Route("api/[controller]")]
 public class QuorumController : ControllerBase
 {
-    private readonly IProducerRepository _producerRepo;
     private readonly IQuorumRepository _quorumRepo;
     private readonly IKeyRepository _keyRepo;
     private readonly ICiphertextRepository _ciphertextRepo;
     private readonly ILogger<QuorumController> _logger;
 
     public QuorumController(
-        IProducerRepository producerRepo,
         IQuorumRepository quorumRepo,
         IKeyRepository keyRepo,
         ICiphertextRepository ciphertextRepo,
         ILogger<QuorumController> logger)
     {
-        _producerRepo = producerRepo;
         _quorumRepo = quorumRepo;
         _keyRepo = keyRepo;
         _ciphertextRepo = ciphertextRepo;
         _logger = logger;
     }
 
-    [HttpPost("submit-batch")]
+    [HttpPost("submit")]
     [Authorize(Policy = "Participant")]
     [ProducesResponseType(typeof(MessageResponse), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(409)]
-    public async Task<ActionResult<MessageResponse>> SubmitBatch([FromBody] List<QuorumSubmission>? rows)
+    public async Task<ActionResult<MessageResponse>> Submit([FromBody] QuorumSubmission? submission)
     {
-        if (rows == null || rows.Count == 0)
-            return BadRequest(new { error = "Batch must contain at least one row" });
+        if (submission?.Answers == null || submission.Answers.Count == 0)
+            return BadRequest(new { error = "Submission must contain answers" });
 
         var producerId = User.GetOid()!;
-        var epochId = rows[0].EpochId;
-        if (rows.Any(r => r.EpochId != epochId))
-            return BadRequest(new { error = "All rows in a batch must share the same epochId" });
-
-        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
-        if (epoch == null)
-            return BadRequest(new { error = "Invalid epoch", submittedEpoch = epochId });
-        if (!epoch.ProducerIds.Contains(producerId))
-            return BadRequest(new { error = "Producer not in epoch", producerId, epochId });
-        if (EpochLifecycle.CancelledError(epoch) is { } cancelled)
+        var period = await _quorumRepo.GetPeriodAsync(submission.PeriodId);
+        if (period == null)
+            return BadRequest(new { error = "Invalid Quorum Check period", periodId = submission.PeriodId });
+        if (!period.ProducerIds.Contains(producerId))
+            return BadRequest(new { error = "Producer not in period", producerId, periodId = period.PeriodId });
+        if (EpochLifecycle.CancelledError(period) is { } cancelled)
             return Conflict(cancelled);
-        if (epoch.IsClosed)
-            return BadRequest(new { error = "Epoch is closed", epochId });
-        if (epoch.QuorumComplete)
-            return BadRequest(new { error = "Quorum Check is already complete", epochId });
+        if (period.QuorumComplete)
+            return BadRequest(new { error = "Quorum Check is already complete", periodId = period.PeriodId });
 
         // Masks only cancel once every pairwise secret exists
-        if (await EpochLifecycle.KeyExchangeErrorAsync(epoch, _keyRepo, _ciphertextRepo) is { } keyError)
+        if (await EpochLifecycle.KeyExchangeErrorAsync(period.KeyScopeId, period.ProducerIds, _keyRepo, _ciphertextRepo) is { } keyError)
             return UnprocessableEntity(keyError);
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var now = DateTime.UtcNow;
-        var responses = new List<QuorumResponse>();
-        foreach (var r in rows)
+        var answers = new List<QuorumAnswer>();
+        foreach (var a in submission.Answers)
         {
-            var country = r.Country?.Trim() ?? string.Empty;
-            var month = r.Month?.Trim() ?? string.Empty;
-            var indicator = r.Indicator?.Trim() ?? string.Empty;
-            var segment = r.Segment?.Trim() ?? string.Empty;
+            var country = a.Country?.Trim() ?? string.Empty;
+            var indicator = a.Indicator?.Trim() ?? string.Empty;
 
-            if (!EpochGrid.IsRequiredCell(country, month, indicator, segment, epoch.StartDate))
-                return BadRequest(new { error = "Cell is not in the required epoch grid", country, month, indicator, segment });
-            if (!seen.Add(EpochGrid.CellKey(country, month, indicator, segment)))
-                return BadRequest(new { error = $"Duplicate cell in batch: {EpochGrid.CellKey(country, month, indicator, segment)}" });
+            if (!QuorumGrid.IsCell(country, indicator))
+                return BadRequest(new { error = "Answer is not in the Quorum Check grid", country, indicator });
+            if (!seen.Add(QuorumGrid.PairKey(country, indicator)))
+                return BadRequest(new { error = $"Duplicate answer: {QuorumGrid.PairKey(country, indicator)}" });
 
-            responses.Add(new QuorumResponse
+            answers.Add(new QuorumAnswer
             {
-                EpochId = epochId,
+                PeriodId = period.PeriodId,
                 ProducerId = producerId,
                 Country = country,
-                Month = month,
                 Indicator = indicator,
-                Segment = segment,
-                MaskedCount = r.MaskedCount,
-                MaskedTagA = r.MaskedTagA,
-                MaskedTagB = r.MaskedTagB,
+                MaskedCount = a.MaskedCount,
+                MaskedTagA = a.MaskedTagA,
+                MaskedTagB = a.MaskedTagB,
                 SubmittedAt = now
             });
         }
 
         // The whole grid is required so partial answers cannot leave the quorum ambiguous
-        if (responses.Count != EpochGrid.CellCount)
-            return BadRequest(new { error = $"Quorum Check must cover all {EpochGrid.CellCount} cells", received = responses.Count });
+        if (answers.Count != QuorumGrid.CellCount)
+            return BadRequest(new { error = $"Quorum Check must cover all {QuorumGrid.CellCount} metrics", received = answers.Count });
 
-        var existing = await _quorumRepo.GetByProducerAsync(epochId, producerId);
-        if (existing.Count > 0)
-            return Conflict(new { error = "Quorum Check already submitted" });
+        var existing = await _quorumRepo.GetAnswersAsync(period.PeriodId);
+        if (existing.Any(r => r.ProducerId == producerId))
+            return Conflict(new { error = "Quorum Check already submitted", code = "already-answered" });
 
-        await _quorumRepo.AddAsync(responses);
-        _logger.LogInformation("RECEIVED quorum answers from {Producer} for epoch {EpochId}", producerId, epochId);
+        await _quorumRepo.AddAnswersAsync(answers);
+        _logger.LogInformation("RECEIVED quorum answers from {Producer} for period {PeriodId}", producerId, period.PeriodId);
 
-        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
+        await EpochLifecycle.CompletePeriodIfAnsweredAsync(period, _quorumRepo);
         return Ok(new MessageResponse
         {
-            Message = epoch.QuorumComplete
-                ? "Quorum Check received. All partners answered; submission phase is open."
+            Message = period.QuorumComplete
+                ? "Quorum Check received. All partners answered; data upload is open."
                 : "Quorum Check received"
         });
     }
 
-    [HttpGet("status")]
+    /// <summary>The caller's view of the current Quorum Check period of a usage type.</summary>
+    [HttpGet("current")]
+    [ProducesResponseType(typeof(QuorumStatusResponse), 200)]
+    [ProducesResponseType(400)]
+    public async Task<ActionResult<QuorumStatusResponse>> GetCurrent([FromQuery] string usageType)
+    {
+        var producerId = User.GetOid();
+        if (string.IsNullOrEmpty(producerId))
+            return Unauthorized();
+        if (!UsageTypes.IsValid(usageType))
+            return BadRequest(new { error = "usageType must be api or chat" });
+
+        var period = await _quorumRepo.GetPeriodForDateAsync(usageType, DateTime.UtcNow);
+        if (period == null)
+            return Ok(new QuorumStatusResponse { UsageType = usageType });
+        return Ok(await BuildStatusAsync(period, producerId));
+    }
+
+    /// <summary>The caller's view of one Quorum Check period, for the epochs it covers.</summary>
+    [HttpGet("periods/{periodId:int}")]
     [ProducesResponseType(typeof(QuorumStatusResponse), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<QuorumStatusResponse>> GetStatus([FromQuery] int epochId)
+    public async Task<ActionResult<QuorumStatusResponse>> GetPeriod(int periodId)
     {
         var producerId = User.GetOid();
         if (string.IsNullOrEmpty(producerId))
             return Unauthorized();
 
-        var epoch = await _producerRepo.GetEpochByIdAsync(epochId);
-        if (epoch == null || !epoch.ProducerIds.Contains(producerId))
-            return NotFound(new { error = "Epoch not found" });
+        var period = await _quorumRepo.GetPeriodAsync(periodId);
+        if (period == null || !period.ProducerIds.Contains(producerId))
+            return NotFound(new { error = "Quorum Check period not found" });
+        return Ok(await BuildStatusAsync(period, producerId));
+    }
 
-        await EpochLifecycle.CompleteQuorumIfAnsweredAsync(epoch, _quorumRepo, _producerRepo);
-        var all = await _quorumRepo.GetByEpochAsync(epochId);
-        var mine = all.Where(r => r.ProducerId == producerId).ToList();
-        var answeredPartners = all.GroupBy(r => r.ProducerId)
-            .Count(g => epoch.ProducerIds.Contains(g.Key) && g.Count() >= EpochGrid.CellCount);
+    private async Task<QuorumStatusResponse> BuildStatusAsync(QuorumPeriod period, string producerId)
+    {
+        await EpochLifecycle.CompletePeriodIfAnsweredAsync(period, _quorumRepo);
+        var answers = await _quorumRepo.GetAnswersAsync(period.PeriodId);
+        var counts = QuorumGrid.AnsweredCounts(period, answers);
 
-        var response = new QuorumStatusResponse
+        return new QuorumStatusResponse
         {
-            EpochId = epochId,
-            QuorumComplete = epoch.QuorumComplete,
-            MyDone = mine.Count >= EpochGrid.CellCount,
-            AnsweredPartners = answeredPartners,
-            PartnerCount = epoch.ProducerCount
-        };
-
-        if (epoch.QuorumComplete)
-        {
-            response.IgnoredCells = QuorumGrid.Evaluate(epoch, all)
+            UsageType = period.UsageType,
+            Period = new QuorumPeriodSummary(period),
+            IsEligible = period.ProducerIds.Contains(producerId),
+            QuorumComplete = period.QuorumComplete,
+            MyDone = counts.GetValueOrDefault(producerId) >= QuorumGrid.CellCount,
+            MyAnsweredAt = answers.Where(r => r.ProducerId == producerId).Select(r => (DateTime?)r.SubmittedAt).Max(),
+            AnsweredPartners = counts.Count(c => c.Value >= QuorumGrid.CellCount),
+            PartnerCount = period.ProducerIds.Count,
+            IgnoredMetrics = QuorumGrid.Evaluate(period, answers)
                 .Where(c => c.Ignored)
-                .Select(c => new SubmittedEntry { Country = c.Country, Month = c.Month, Indicator = c.Indicator, Segment = c.Segment })
-                .ToList();
-        }
-
-        return Ok(response);
+                .Select(c => new QuorumMetric { Country = c.Country, Indicator = c.Indicator })
+                .ToList()
+        };
     }
 }

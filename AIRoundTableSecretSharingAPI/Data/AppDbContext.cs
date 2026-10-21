@@ -16,7 +16,8 @@ public class AppDbContext : DbContext
     public DbSet<MetricSubmission> Submissions => Set<MetricSubmission>();
     public DbSet<PartnerPublicKey> PublicKeys => Set<PartnerPublicKey>();
     public DbSet<PartnerCiphertext> Ciphertexts => Set<PartnerCiphertext>();
-    public DbSet<QuorumResponse> QuorumResponses => Set<QuorumResponse>();
+    public DbSet<QuorumPeriod> QuorumPeriods => Set<QuorumPeriod>();
+    public DbSet<QuorumAnswer> QuorumAnswers => Set<QuorumAnswer>();
     public DbSet<ClientCredential> ClientCredentials => Set<ClientCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -46,6 +47,17 @@ public class AppDbContext : DbContext
             // EpochId is an application-assigned value, not a DB-generated identity
             e.Property(ep => ep.EpochId).ValueGeneratedNever();
             e.Property(ep => ep.ProducerIds)
+                .HasConversion(listConverter, listComparer)
+                .HasColumnType("nvarchar(max)");
+            e.Property(ep => ep.UsageType).HasDefaultValue(UsageTypes.Api);
+        });
+
+        modelBuilder.Entity<QuorumPeriod>(e =>
+        {
+            e.HasKey(p => p.PeriodId);
+            // Application-assigned like epochs; its negation is the period's key-exchange scope
+            e.Property(p => p.PeriodId).ValueGeneratedNever();
+            e.Property(p => p.ProducerIds)
                 .HasConversion(listConverter, listComparer)
                 .HasColumnType("nvarchar(max)");
         });
@@ -84,14 +96,12 @@ public class AppDbContext : DbContext
             e.Property(c => c.CiphertextBase64).HasColumnType("nvarchar(max)");
         });
 
-        modelBuilder.Entity<QuorumResponse>(e =>
+        modelBuilder.Entity<QuorumAnswer>(e =>
         {
-            e.HasKey(q => new { q.EpochId, q.ProducerId, q.Country, q.Month, q.Indicator, q.Segment });
+            e.HasKey(q => new { q.PeriodId, q.ProducerId, q.Country, q.Indicator });
             e.Property(q => q.ProducerId).HasMaxLength(100);
             e.Property(q => q.Country).HasMaxLength(100);
-            e.Property(q => q.Month).HasMaxLength(7);
             e.Property(q => q.Indicator).HasMaxLength(64);
-            e.Property(q => q.Segment).HasMaxLength(64);
         });
 
         modelBuilder.Entity<ClientCredential>(e =>

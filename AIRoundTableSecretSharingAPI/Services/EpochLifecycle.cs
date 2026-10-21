@@ -25,26 +25,39 @@ public static class EpochLifecycle
         epoch.IsClosed = true;
     }
 
-    /// <summary>Cell keys below the quorum; empty until the Quorum Check is complete (and for legacy epochs).</summary>
-    public static async Task<HashSet<string>> IgnoredKeysAsync(ProducerEpoch epoch, IQuorumRepository quorum) =>
-        epoch.QuorumComplete
-            ? QuorumGrid.IgnoredKeys(epoch, await quorum.GetByEpochAsync(epoch.EpochId))
-            : new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>The epoch's Quorum Check period; null for epochs created before periods existed.</summary>
+    public static async Task<QuorumPeriod?> PeriodOfAsync(ProducerEpoch epoch, IQuorumRepository quorum) =>
+        epoch.QuorumPeriodId is { } id ? await quorum.GetPeriodAsync(id) : null;
 
-    public static async Task CompleteQuorumIfAnsweredAsync(
-        ProducerEpoch epoch,
-        IQuorumRepository quorum,
-        IProducerRepository producers)
+    /// <summary>Epochs without a period have no Quorum Check, so it counts as complete.</summary>
+    public static async Task<bool> IsQuorumCompleteAsync(ProducerEpoch epoch, IQuorumRepository quorum)
     {
-        if (epoch.QuorumComplete || epoch.IsCancelled)
+        var period = await PeriodOfAsync(epoch, quorum);
+        if (period == null)
+            return true;
+        await CompletePeriodIfAnsweredAsync(period, quorum);
+        return period.QuorumComplete;
+    }
+
+    /// <summary>Cell keys below the quorum; empty until the period's Quorum Check is complete (and without a period).</summary>
+    public static async Task<HashSet<string>> IgnoredKeysAsync(ProducerEpoch epoch, IQuorumRepository quorum)
+    {
+        var period = await PeriodOfAsync(epoch, quorum);
+        if (period is not { QuorumComplete: true })
+            return new HashSet<string>(StringComparer.Ordinal);
+        return QuorumGrid.IgnoredCellKeys(epoch, QuorumGrid.Evaluate(period, await quorum.GetAnswersAsync(period.PeriodId)));
+    }
+
+    public static async Task CompletePeriodIfAnsweredAsync(QuorumPeriod period, IQuorumRepository quorum)
+    {
+        if (period.QuorumComplete || period.IsCancelled)
             return;
 
-        var responses = await quorum.GetByEpochAsync(epoch.EpochId);
-        if (!QuorumGrid.IsComplete(epoch, responses))
+        if (!QuorumGrid.IsComplete(period, await quorum.GetAnswersAsync(period.PeriodId)))
             return;
 
-        await producers.MarkQuorumCompleteAsync(epoch.EpochId);
-        epoch.QuorumComplete = true;
+        await quorum.MarkCompleteAsync(period.PeriodId);
+        period.QuorumComplete = true;
     }
 
     public const string SupportEmail = "datapartnership@worldbank.org";
@@ -62,20 +75,27 @@ public static class EpochLifecycle
             }
             : null;
 
+    /// <summary>Returns an error payload when an admin cancelled the period, otherwise null.</summary>
+    public static object? CancelledError(QuorumPeriod period) =>
+        period.IsCancelled
+            ? new { error = $"Quorum Check period {period.PeriodId} was cancelled by an admin.", code = "period-cancelled" }
+            : null;
+
     /// <summary>Returns an error payload when key exchange is not finished, otherwise null.</summary>
     public static async Task<object?> KeyExchangeErrorAsync(
-        ProducerEpoch epoch,
+        int keyScopeId,
+        IReadOnlyList<string> producerIds,
         IKeyRepository keys,
         ICiphertextRepository ciphertexts)
     {
-        var registeredKeyIds = (await keys.GetAllKeysAsync(epoch.EpochId)).Select(k => k.ProducerId).ToHashSet();
-        var missingKeys = epoch.ProducerIds.Except(registeredKeyIds).ToList();
+        var registeredKeyIds = (await keys.GetAllKeysAsync(keyScopeId)).Select(k => k.ProducerId).ToHashSet();
+        var missingKeys = producerIds.Except(registeredKeyIds).ToList();
         if (missingKeys.Count > 0)
             return new { error = "Key exchange incomplete: missing public keys", missingPublicKeys = missingKeys };
 
-        var n = epoch.ProducerIds.Count;
+        var n = producerIds.Count;
         var expectedCiphertexts = n * (n - 1) / 2;
-        var actualCiphertexts = await ciphertexts.CountForPartnersAsync(epoch.EpochId, epoch.ProducerIds);
+        var actualCiphertexts = await ciphertexts.CountForPartnersAsync(keyScopeId, producerIds.ToList());
         if (actualCiphertexts < expectedCiphertexts)
             return new { error = "Key exchange incomplete: not all ciphertexts posted", expectedCiphertexts, actualCiphertexts };
 

@@ -152,24 +152,27 @@ Let:
 
 The aggregator learns only the total (1,700,000) but **cannot determine** any individual partner's MAU value.
 
-## 🗳️ Quorum Check
+## 🗳️ Usage types and the Quorum Check
 
-Every new epoch has a **Quorum Check** that runs after key exchange and before data submission. Each partner uploads
-the same CSV format with `value` = `1` (participate) or `0` (do not participate) for every metric cell. Answers are
-**masked in the browser** with the pairwise shared secrets, so the aggregator only learns per-metric totals. Once all
-partners answered (`QuorumComplete`), the submission phase opens. There is no force-close: masks only cancel when every
-partner has answered.
+There are two submission streams, **API usage** (`api`) and **Consumer Chat Usage** (`chat`). Each epoch has a
+`usageType`; each type has its own epoch timeline, so creating an epoch only ends the open epoch of the same type.
 
-- Each answer carries three masked values: the 0/1 flag, and the flag times two secret random 64-bit **tags** held only in
-  the partner's browser. Their sums give the participant **count** and a **composition signature** (128 bits, hex).
-- A metric with fewer than 3 participants is **ignored**: no aggregate is computed and every partner leaves it out of
-  their data upload. The API rejects submissions for it (`400`), and it does not count toward epoch completion.
-- Partners who answered `0` leave that metric out of their CSV; the browser submits a masked `0` for it automatically so
-  every partner's masks still cancel. A CSV row for a declined or ignored metric is rejected in the web UI (declined
-  cells come from answers kept in the browser; masked values cannot be checked server-side).
-- Equal signatures within an epoch mean identical participant sets; the set itself is not revealed. Admins see count and
-  signature per metric in the Admin Panel (`/api/admin/epochs/{id}` → `quorumCells`).
-- Endpoints: `POST /api/quorum/submit-batch`, `GET /api/quorum/status?epochId=`. Epochs created before this feature are treated as already complete.
+A **Quorum Check period** covers 12 months of epochs of one usage type. An admin opens it with its partners
+(`POST /api/admin/quorum-periods`); every epoch created in it must fall inside it and has exactly its partners.
+
+- The period runs its own ML-KEM key exchange: keys and ciphertexts are stored under the negated period id, and the
+  key exchange and ciphertext endpoints take `periodId` instead of `epochId`. The web UI runs it silently on the
+  Quorum Check page.
+- Each partner answers once for 15 metrics (5 countries × 3 indicators): 1 = will report, 0 = will not. Answers are
+  masked with the period's pairwise secrets, so the aggregator only learns per-metric totals: the participant
+  **count** and a 128-bit composition **signature** (the flag times two secret 64-bit tags held in the browser).
+- An answer applies to every month and segment of that indicator in every epoch of the period. A metric with fewer
+  than 3 participants is **ignored**: no data is submitted or aggregated for it, and it does not count toward epoch
+  completion. Uploads are blocked (`409 quorum-pending`) until every partner of the period has answered.
+- In the data CSV, partners include all 200 rows: a value above 0 for each ticked metric and 0 for the others. The
+  browser drops rows of ignored metrics before masking.
+- Endpoints: `GET /api/quorum/current?usageType=`, `GET /api/quorum/periods/{id}`, `POST /api/quorum/submit`.
+  Epochs created before periods existed have no Quorum Check and count as complete.
 
 ## 🏗️ Project Structure
 
@@ -335,7 +338,8 @@ All endpoints require a valid Azure Entra ID Bearer token. The caller's producer
 | `/metrics/submit` | POST | Participant | Submit a masked metric value |
 | `/metrics/submit-batch` | POST | Participant | Submit a batch of masked metric values |
 | `/metrics/aggregate` | GET | Admin | Get aggregate for a country / month |
-| `/admin/producers/reset-and-create-epoch` | POST | Admin | Select at least 3 registered partners and open a new epoch |
+| `/admin/quorum-periods` | POST / GET | Admin | Open or list Quorum Check periods (usage type, start month, partners) |
+| `/admin/producers/reset-and-create-epoch` | POST | Admin | Open a new epoch of a usage type inside a Quorum Check period, with the period's partners |
 | `/admin/reset` | POST | Admin | Clear all data |
 
 ### Authentication — Azure Entra ID (Microsoft Identity Platform)

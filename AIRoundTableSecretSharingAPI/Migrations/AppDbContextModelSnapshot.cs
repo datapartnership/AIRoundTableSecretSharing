@@ -17,7 +17,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -174,14 +174,21 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<bool>("QuorumComplete")
-                        .HasColumnType("bit");
+                    b.Property<int?>("QuorumPeriodId")
+                        .HasColumnType("int");
 
                     b.Property<int?>("ReplacedByEpochId")
                         .HasColumnType("int");
 
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("UsageType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("api");
 
                     b.HasKey("EpochId");
 
@@ -210,9 +217,9 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.ToTable("Producers");
                 });
 
-            modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.QuorumResponse", b =>
+            modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.QuorumAnswer", b =>
                 {
-                    b.Property<int>("EpochId")
+                    b.Property<int>("PeriodId")
                         .HasColumnType("int");
 
                     b.Property<string>("ProducerId")
@@ -223,15 +230,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<string>("Month")
-                        .HasMaxLength(7)
-                        .HasColumnType("nvarchar(7)");
-
                     b.Property<string>("Indicator")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<string>("Segment")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
@@ -247,9 +246,44 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<DateTime>("SubmittedAt")
                         .HasColumnType("datetime2");
 
-                    b.HasKey("EpochId", "ProducerId", "Country", "Month", "Indicator", "Segment");
+                    b.HasKey("PeriodId", "ProducerId", "Country", "Indicator");
 
-                    b.ToTable("QuorumResponses");
+                    b.ToTable("QuorumAnswers");
+                });
+
+            modelBuilder.Entity("AIRoundTableSecretSharingCommon.Models.QuorumPeriod", b =>
+                {
+                    b.Property<int>("PeriodId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CancelReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ProducerIds")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("QuorumComplete")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UsageType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.HasKey("PeriodId");
+
+                    b.ToTable("QuorumPeriods");
                 });
 #pragma warning restore 612, 618
         }
