@@ -311,13 +311,18 @@ This test executes the full protocol in sequence and validates the final aggrega
 **Then** that row shows "you declined this metric in the Quorum Check; remove this row (0 is submitted for it automatically)" and the file is not valid
 
 ### TC-QUORUM-SUB-02 — Below-quorum row is rejected
-**Given** metric M has fewer than 3 participants  
+**Given** metric M has fewer than 3 participants (e.g. three partners and one leaves M unticked)  
 **When** a partner's data CSV contains a row for M  
-**Then** that row shows "this metric fell below the quorum; remove this row (do not submit data for it)" and the file is not valid
+**Then** the file check shows "N rows are for metrics below the quorum" with the fix "Delete these rows" and the file is not valid
 
-### TC-QUORUM-SUB-03 — CSV with only participating cells validates
-**Given** a partner's CSV has exactly one row (value > 0) for each metric they participate in that met the quorum  
-**Then** the file is valid, the "Valid file" count equals that number of rows, and no declined or below-quorum cells are listed as missing
+### TC-QUORUM-SUB-03 — CSV without below-quorum cells validates
+**Given** a partner's CSV has exactly one row for each cell of the metrics that met the quorum, and no rows for below-quorum metrics  
+**Then** the file is valid, the "Valid file" count equals that number of rows, and no below-quorum cells are listed as missing; a missing row is reported as "Found: X of (200 − ignored) combinations"
+
+### TC-QUORUM-SUB-03a — Sample leaves out below-quorum cells
+**Given** the Quorum Check is complete and metric M is below the quorum  
+**When** the partner clicks "Download sample.csv" on the epoch page  
+**Then** the file has no rows for M, has 200 − ignored rows, and passes the file check unchanged
 
 ### TC-QUORUM-SUB-04 — Declined cells get automatic zeros
 **Given** a valid CSV from a partner who declined metrics that met the quorum  
