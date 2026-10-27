@@ -173,7 +173,7 @@ A **Quorum Check period** covers 12 months of epochs of one usage type. An admin
 - An answer applies to every month and segment of that indicator in every epoch of the period. A metric with fewer
   than 3 participants is **ignored**: no data is submitted or aggregated for it, and it does not count toward epoch
   completion. Uploads are blocked (`409 quorum-pending`) until every partner of the period has answered.
-- In the data CSV, partners include all 200 rows: a value above 0 for each ticked metric and 0 for the others. The
+- In the data CSV, partners include all 150 rows (5 countries × 3 months × 10 series; 200 for 4-month epochs created before quarterly epochs): a value above 0 for each ticked metric and 0 for the others. The
   browser drops rows of ignored metrics before masking.
 - Endpoints: `GET /api/quorum/current?usageType=`, `GET /api/quorum/periods/{id}`, `POST /api/quorum/submit`.
   Epochs created before periods existed have no Quorum Check and count as complete.
@@ -349,7 +349,7 @@ All endpoints require a valid Azure Entra ID Bearer token. The caller's producer
 | `/metrics/submit-batch` | POST | Participant | Submit a batch of masked metric values |
 | `/metrics/aggregate` | GET | Admin | Get aggregate for a country / month |
 | `/admin/quorum-periods` | POST / GET | Admin | Open or list Quorum Check periods (usage type, start month, partners) |
-| `/admin/producers/reset-and-create-epoch` | POST | Admin | Open a new epoch of a usage type inside a Quorum Check period, with the period's partners |
+| `/admin/quorum-periods/{id}/next-epoch` | POST | Admin | Create the period's next quarterly epoch, with its partners; refused (`409`) until its Quorum Check is complete, while any epoch is open, or once all 4 quarters exist |
 | `/admin/reset` | POST | Admin | Clear all data |
 
 ### Authentication — Azure Entra ID (Microsoft Identity Platform)

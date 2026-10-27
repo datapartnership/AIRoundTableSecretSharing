@@ -8,7 +8,6 @@ public interface IProducerRepository
     Task<ProducerEpoch?> GetEpochForDateAsync(DateTime date, string usageType = UsageTypes.Api);
     Task<ProducerEpoch?> GetEpochByIdAsync(int epochId);
     Task<List<ProducerEpoch>> GetAllEpochsAsync();
-    Task AddProducerAsync(ProducerInfo producer);
     Task UpsertProducerAsync(ProducerInfo producer);
     Task DeactivateProducerAsync(string producerId);
     Task<List<ProducerInfo>> GetProducersByIdsAsync(IReadOnlyCollection<string> ids);

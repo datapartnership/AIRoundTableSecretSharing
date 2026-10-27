@@ -71,6 +71,30 @@ public static class EpochLifecycle
         return period.QuorumComplete ? null : period;
     }
 
+    /// <summary>The one epoch still collecting submissions, of any usage type; null when every epoch is closed or cancelled.</summary>
+    public static async Task<ProducerEpoch?> OpenEpochAsync(
+        IProducerRepository producers,
+        ISubmissionRepository submissions,
+        IQuorumRepository quorum)
+    {
+        foreach (var epoch in (await producers.GetAllEpochsAsync()).Where(e => !e.IsClosed && !e.IsCancelled))
+        {
+            // Closing is recorded lazily, so the last submission may not have closed it yet
+            await CloseIfCompleteAsync(epoch, submissions, producers, quorum);
+            if (!epoch.IsClosed)
+                return epoch;
+        }
+        return null;
+    }
+
+    /// <summary>Why the period's next epoch cannot be created yet, as an error code; null when it can.</summary>
+    public static string? NextEpochBlocker(QuorumPeriod period, IEnumerable<ProducerEpoch> epochsOfPeriod, ProducerEpoch? openEpoch) =>
+        period.IsCancelled ? "period-cancelled"
+        : !period.QuorumComplete ? "quorum-incomplete"
+        : period.NextSlot(epochsOfPeriod) == null ? "period-full"
+        : openEpoch != null ? "epoch-open"
+        : null;
+
     public const string SupportEmail = "datapartnership@worldbank.org";
 
     /// <summary>Returns an error payload when an admin cancelled the epoch, otherwise null.</summary>

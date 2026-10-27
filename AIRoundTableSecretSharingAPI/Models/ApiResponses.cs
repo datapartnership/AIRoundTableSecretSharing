@@ -1,3 +1,4 @@
+using AIRoundTableSecretSharingAPI.Services;
 using AIRoundTableSecretSharingCommon.Models;
 
 namespace AIRoundTableSecretSharingAPI.Models;
@@ -14,23 +15,10 @@ public class TokenResponse
     public int ExpiresIn { get; set; }
 }
 
-public class AddProducerResponse
-{
-    public string Message { get; set; } = string.Empty;
-    public ProducerEpoch Epoch { get; set; } = null!;
-}
-
 public class CancelEpochRequest
 {
     [System.ComponentModel.DataAnnotations.MaxLength(500)]
     public string? Reason { get; set; }
-}
-
-public class ReplaceProducersRequest
-{
-    public string UsageType { get; set; } = UsageTypes.Api;
-    public string? StartMonth { get; set; }
-    public List<ReplaceProducerItem> Producers { get; set; } = new();
 }
 
 public class ReplaceProducerItem
@@ -102,6 +90,8 @@ public class EpochSummary
     public int? ReplacedByEpochId { get; set; }
     /// <summary>Width the partners mask metric values with: 128, or 64 for older epochs.</summary>
     public int MaskBits { get; set; }
+    /// <summary>Reporting months: 3, or 4 for epochs created before quarterly epochs.</summary>
+    public int MonthCount { get; set; }
     public bool IsCancelled => CancelledAt != null;
     public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<string> ProducerIds { get; set; } = new();
@@ -145,6 +135,8 @@ public class EpochDetailResponse
     public int? ReplacedByEpochId { get; set; }
     /// <summary>Width the partners mask metric values with: 128, or 64 for older epochs.</summary>
     public int MaskBits { get; set; }
+    /// <summary>Reporting months: 3, or 4 for epochs created before quarterly epochs.</summary>
+    public int MonthCount { get; set; }
     public bool IsCancelled => CancelledAt != null;
     public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<EpochPartnerInfo> Partners { get; set; } = new();
@@ -204,6 +196,25 @@ public class QuorumPeriodSummary
     public DateTime? CancelledAt { get; set; }
     public string? CancelReason { get; set; }
     public bool IsCancelled => CancelledAt != null;
+    public int EpochCount { get; set; }
+    /// <summary>The quarter the next epoch takes (0-based); null once every quarter is used.</summary>
+    public int? NextSlot { get; set; }
+    public DateTime? NextSlotStart { get; set; }
+    /// <summary>Why the next epoch cannot be created yet: period-cancelled, quorum-incomplete, period-full or epoch-open.</summary>
+    public string? BlockedReason { get; set; }
+    /// <summary>The open epoch blocking the next one, when <see cref="BlockedReason"/> is epoch-open.</summary>
+    public int? OpenEpochId { get; set; }
+    public bool CanCreateEpoch => BlockedReason == null;
+
+    public QuorumPeriodSummary WithNextEpoch(QuorumPeriod p, IReadOnlyCollection<ProducerEpoch> epochsOfPeriod, ProducerEpoch? openEpoch)
+    {
+        EpochCount = p.EpochCount;
+        NextSlot = p.NextSlot(epochsOfPeriod);
+        NextSlotStart = NextSlot is { } slot ? p.SlotStart(slot) : null;
+        BlockedReason = EpochLifecycle.NextEpochBlocker(p, epochsOfPeriod, openEpoch);
+        OpenEpochId = BlockedReason == "epoch-open" ? openEpoch?.EpochId : null;
+        return this;
+    }
 }
 
 public class QuorumMetric

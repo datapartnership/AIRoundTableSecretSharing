@@ -52,6 +52,7 @@ public class AppDbContext : DbContext
                 .HasColumnType("nvarchar(max)");
             e.Property(ep => ep.UsageType).HasDefaultValue(UsageTypes.Api);
             e.Property(ep => ep.MaskBits).HasDefaultValue(128);
+            e.Property(ep => ep.MonthCount).HasDefaultValue(EpochGrid.QuarterMonths);
         });
 
         modelBuilder.Entity<QuorumPeriod>(e =>

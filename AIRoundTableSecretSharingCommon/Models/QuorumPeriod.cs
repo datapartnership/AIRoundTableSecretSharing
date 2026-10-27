@@ -31,7 +31,23 @@ public class QuorumPeriod
     [NotMapped]
     public int KeyScopeId => -PeriodId;
 
-    /// <summary>True when the epoch's reporting months all fall inside this period.</summary>
-    public bool Covers(DateTime epochStart) =>
-        epochStart >= StartDate && epochStart.AddMonths(EpochGrid.MonthCount) <= EndDate;
+    /// <summary>Quarterly epochs in the period, created in order.</summary>
+    [NotMapped]
+    public int EpochCount => MonthCount / EpochGrid.QuarterMonths;
+
+    public DateTime SlotStart(int slot) => StartDate.AddMonths(slot * EpochGrid.QuarterMonths);
+
+    /// <summary>
+    /// The quarter after the last month any of the period's epochs reports, cancelled ones included (a cancelled
+    /// quarter is redone by recreating it); null once every quarter is used.
+    /// </summary>
+    public int? NextSlot(IEnumerable<ProducerEpoch> epochsOfPeriod)
+    {
+        var usedMonths = epochsOfPeriod
+            .Select(e => (e.StartDate.Year - StartDate.Year) * 12 + e.StartDate.Month - StartDate.Month + e.MonthCount)
+            .DefaultIfEmpty(0)
+            .Max();
+        var slot = (usedMonths + EpochGrid.QuarterMonths - 1) / EpochGrid.QuarterMonths;
+        return slot < EpochCount ? slot : null;
+    }
 }

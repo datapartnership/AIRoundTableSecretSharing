@@ -118,6 +118,7 @@ public class RegistryController : ControllerBase
                 CancelReason = e.CancelReason,
                 ReplacedByEpochId = e.ReplacedByEpochId,
                 MaskBits = e.MaskBits,
+                MonthCount = e.MonthCount,
                 ProducerIds = e.ProducerIds,
                 IsEligible = isEligible,
                 MySubmissionComplete = isEligible && !e.IsCancelled && await MySubmissionCompleteAsync(e, producerId)
@@ -135,66 +136,6 @@ public class RegistryController : ControllerBase
             return false;
         var ignored = await EpochLifecycle.IgnoredKeysAsync(epoch, _quorumRepo);
         return !EpochGrid.MissingCells(epoch, mine, ignored).Any(m => m.ProducerId == producerId);
-    }
-
-    [HttpPost("producers")]
-    [Authorize(Policy = "AdminOnly")]
-    [ProducesResponseType(typeof(AddProducerResponse), 200)]
-    [ProducesResponseType(400)]
-    [ProducesResponseType(403)]
-    public async Task<ActionResult<AddProducerResponse>> AddProducer([FromBody] AddProducerRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.ProducerId))
-            return BadRequest(new { error = "producerId is required." });
-
-        if (request.ProducerId == User.GetOid())
-            return BadRequest(new { error = "Admins cannot be epoch participants." });
-
-        var startDate = new DateTime(
-            request.StartDate.Year,
-            request.StartDate.Month,
-            1).AddMonths(1);
-
-        var existingActive = await _producerRepo.GetActiveProducersAsync(startDate);
-        var resultingCount = existingActive.Count(p => p.ProducerId != request.ProducerId) + 1;
-        if (resultingCount < EpochLifecycle.MinParticipants)
-        {
-            return BadRequest(new
-            {
-                error = $"At least {EpochLifecycle.MinParticipants} producers are required to create an epoch.",
-                producerCount = resultingCount
-            });
-        }
-
-        var producer = new ProducerInfo
-        {
-            ProducerId = request.ProducerId,
-            DisplayName = request.DisplayName,
-            JoinedDate = startDate,
-            IsActive = true
-        };
-
-        await _producerRepo.AddProducerAsync(producer);
-
-        // Build new epoch from all active producers (including the one just added)
-        var activeProducers = await _producerRepo.GetActiveProducersAsync(startDate);
-        var currentEpoch = await _producerRepo.GetEpochForDateAsync(DateTime.UtcNow);
-        var newEpoch = new ProducerEpoch
-        {
-            EpochId = (currentEpoch?.EpochId ?? 0) + 1,
-            StartDate = startDate,
-            EndDate = null,
-            ProducerIds = activeProducers.Select(p => p.ProducerId).OrderBy(id => id).ToList(),
-            ProducerCount = activeProducers.Count
-        };
-
-        await _producerRepo.CreateEpochAsync(newEpoch);
-
-        _logger.LogInformation(
-            "Added producer {ProducerId}, effective {StartDate}. New epoch {EpochId} created.",
-            request.ProducerId, startDate, newEpoch.EpochId);
-
-        return Ok(new AddProducerResponse { Message = "Producer added", Epoch = newEpoch });
     }
 
     [HttpPost("producers/me")]
@@ -234,11 +175,4 @@ public class RegistryController : ControllerBase
         _logger.LogInformation("Self-registered producer {ProducerId} ({DisplayName})", producerId, displayName);
         return Ok(new { producerId, displayName });
     }
-}
-
-public class AddProducerRequest
-{
-    public string ProducerId { get; set; } = string.Empty;
-    public string DisplayName { get; set; } = string.Empty;
-    public DateTime StartDate { get; set; }
 }

@@ -59,7 +59,7 @@ public class MetricsController : ControllerBase
 
         var epoch = gate.Epoch!;
         if (!EpochGrid.IsRequiredCell(
-                submission.Country, submission.Month, submission.Indicator, submission.Segment, epoch.StartDate))
+                submission.Country, submission.Month, submission.Indicator, submission.Segment, epoch))
         {
             return BadRequest(new
             {
@@ -142,7 +142,7 @@ public class MetricsController : ControllerBase
                 return BelowQuorumError(submission);
 
             if (!EpochGrid.IsRequiredCell(
-                    submission.Country, submission.Month, submission.Indicator, submission.Segment, epoch.StartDate))
+                    submission.Country, submission.Month, submission.Indicator, submission.Segment, epoch))
             {
                 return BadRequest(new
                 {

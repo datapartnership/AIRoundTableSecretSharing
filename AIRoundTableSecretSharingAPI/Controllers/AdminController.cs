@@ -66,129 +66,67 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Replaces the active epoch with a new one for the submitted producers.
-    /// Previous epochs and their data are kept; keys and ciphertexts are scoped per epoch,
-    /// so the new round runs a fresh key exchange.
+    /// Creates the period's next quarterly epoch, with the period's partners. Epochs are created in order, once the
+    /// Quorum Check is complete, and only when no other epoch is open. Previous epochs and their data are kept;
+    /// keys and ciphertexts are scoped per epoch, so the new epoch runs a fresh key exchange.
     /// </summary>
-    [HttpPost("producers/reset-and-create-epoch")]
+    [HttpPost("quorum-periods/{periodId:int}/next-epoch")]
     [ProducesResponseType(typeof(ReplaceProducersResponse), 200)]
     [ProducesResponseType(400)]
-    public async Task<ActionResult<ReplaceProducersResponse>> ResetAndCreateEpoch([FromBody] ReplaceProducersRequest request)
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<ActionResult<ReplaceProducersResponse>> CreateNextEpoch(int periodId)
     {
-        if (!UsageTypes.IsValid(request.UsageType))
-            return BadRequest(new { error = "usageType must be api or chat." });
-
-        if (request.Producers == null || request.Producers.Count < EpochLifecycle.MinParticipants)
-            return BadRequest(new { error = $"At least {EpochLifecycle.MinParticipants} producers are required." });
-
-        if (!TryResolveEpochStartDate(request.StartMonth, out var startDate))
-            return BadRequest(new { error = "startMonth must be in YYYY-MM format (e.g. 2025-01)." });
-
-        // Every epoch belongs to a Quorum Check period of its usage type and has the period's partners
-        var period = (await _quorumRepo.GetAllPeriodsAsync())
-            .FirstOrDefault(p => p.UsageType == request.UsageType && !p.IsCancelled && p.Covers(startDate));
+        var period = await _quorumRepo.GetPeriodAsync(periodId);
         if (period == null)
+            return NotFound(new { error = "Quorum Check period not found" });
+        await EpochLifecycle.CompletePeriodIfAnsweredAsync(period, _quorumRepo);
+
+        var epochsOfPeriod = (await _producerRepo.GetAllEpochsAsync()).Where(e => e.QuorumPeriodId == periodId).ToList();
+        var openEpoch = await EpochLifecycle.OpenEpochAsync(_producerRepo, _submissionRepo, _quorumRepo);
+        switch (EpochLifecycle.NextEpochBlocker(period, epochsOfPeriod, openEpoch))
         {
-            return BadRequest(new
-            {
-                error = $"No Quorum Check period of this usage type covers the epoch's {EpochGrid.MonthCount} months. Create the period first.",
-                code = "no-period"
-            });
+            case "period-cancelled":
+                return Conflict(new { error = $"Quorum Check period {periodId} was cancelled.", code = "period-cancelled" });
+            case "quorum-incomplete":
+                return Conflict(new { error = $"Quorum Check period {periodId} is still answering. Epochs can be created once every partner has answered.", code = "quorum-incomplete" });
+            case "period-full":
+                return Conflict(new { error = $"Every quarter of Quorum Check period {periodId} already has an epoch.", code = "period-full" });
+            case "epoch-open":
+                return Conflict(new
+                {
+                    error = $"Epoch {openEpoch!.EpochId} is still open. It closes when every partner has submitted; cancel it to move on.",
+                    code = "epoch-open",
+                    epochId = openEpoch.EpochId
+                });
         }
 
-        var normalizedProducers = request.Producers
-            .Select(p => new ReplaceProducerItem
-            {
-                ProducerId = p.ProducerId.Trim(),
-                DisplayName = p.DisplayName.Trim()
-            })
-            .ToList();
-
-        if (normalizedProducers.Any(p => string.IsNullOrWhiteSpace(p.ProducerId) || string.IsNullOrWhiteSpace(p.DisplayName)))
-            return BadRequest(new { error = "Each producer must include non-empty producerId and displayName." });
-
-        var duplicateIds = normalizedProducers
-            .GroupBy(p => p.ProducerId, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .OrderBy(x => x)
-            .ToList();
-
-        if (duplicateIds.Count > 0)
-            return BadRequest(new { error = "Duplicate producerId values are not allowed.", duplicateProducerIds = duplicateIds });
-
-        var periodIds = period.ProducerIds.ToHashSet(StringComparer.Ordinal);
-        if (normalizedProducers.Count != periodIds.Count || normalizedProducers.Any(p => !periodIds.Contains(p.ProducerId)))
-        {
-            return BadRequest(new
-            {
-                error = $"The epoch's partners must be exactly the partners of Quorum Check period {period.PeriodId}.",
-                code = "partners-differ-from-period",
-                periodProducerIds = period.ProducerIds
-            });
-        }
-
-        var callerId = User.GetOid();
-        if (callerId != null && normalizedProducers.Any(p => p.ProducerId == callerId))
-            return BadRequest(new { error = "Admins cannot be epoch participants." });
-
-        var unregisteredIds = await UnregisteredProducerIdsAsync(normalizedProducers.Select(p => p.ProducerId).ToList());
+        var unregisteredIds = await UnregisteredProducerIdsAsync(period.ProducerIds);
         if (unregisteredIds.Count > 0)
         {
             return BadRequest(new
             {
-                error = "Every producer must be an active registered partner.",
+                error = "Every producer must still be an active registered partner.",
                 unregisteredProducerIds = unregisteredIds
             });
         }
 
-        _logger.LogWarning(
-            "Admin producer replacement initiated by {User}. New producer count: {Count}",
-            User.Identity?.Name ?? "unknown",
-            normalizedProducers.Count);
+        var slot = period.NextSlot(epochsOfPeriod)!.Value;
+        var producerIds = period.ProducerIds.OrderBy(id => id, StringComparer.Ordinal).ToList();
+        var epoch = await NewEpochAsync(period.SlotStart(slot), producerIds, period.UsageType, period.PeriodId);
+        // Ends the previous epoch of the usage type in the timeline; it is already closed or cancelled
+        await _producerRepo.CreateEpochAsync(epoch);
 
-        await using var tx = await _db.Database.BeginTransactionAsync();
-        try
+        _logger.LogInformation(
+            "Created {UsageType} epoch {EpochId} (Q{Quarter} of period {PeriodId}) effective {StartDate} with {Count} producers",
+            epoch.UsageType, epoch.EpochId, slot + 1, period.PeriodId, epoch.StartDate, epoch.ProducerCount);
+
+        return Ok(new ReplaceProducersResponse
         {
-            foreach (var item in normalizedProducers)
-            {
-                await _producerRepo.UpsertProducerAsync(new ProducerInfo
-                {
-                    ProducerId = item.ProducerId,
-                    DisplayName = item.DisplayName,
-                    JoinedDate = startDate,
-                    IsActive = true
-                });
-            }
-
-            var sortedProducerIds = normalizedProducers
-                .Select(p => p.ProducerId)
-                .OrderBy(id => id, StringComparer.Ordinal)
-                .ToList();
-
-            var epoch = await NewEpochAsync(startDate, sortedProducerIds, request.UsageType, period.PeriodId);
-            await _producerRepo.CreateEpochAsync(epoch);
-            await tx.CommitAsync();
-
-            _logger.LogInformation(
-                "Created {UsageType} epoch {EpochId} effective {StartDate} with {Count} producers. Previous epochs kept.",
-                epoch.UsageType,
-                epoch.EpochId,
-                epoch.StartDate,
-                epoch.ProducerCount);
-
-            return Ok(new ReplaceProducersResponse
-            {
-                Message = "New epoch created. Previous epoch data was kept.",
-                Epoch = epoch,
-                Producers = sortedProducerIds
-            });
-        }
-        catch
-        {
-            await tx.RollbackAsync();
-            throw;
-        }
+            Message = "New epoch created. Previous epoch data was kept.",
+            Epoch = epoch,
+            Producers = producerIds
+        });
     }
 
     /// <summary>
@@ -233,6 +171,16 @@ public class AdminController : ControllerBase
             return Conflict(new { error = $"This epoch was already replaced by epoch {existing}.", code = "already-replaced" });
         if (old.IsClosed)
             return Conflict(new { error = "A closed epoch cannot be recreated.", code = "epoch-closed" });
+        // An open epoch is cancelled by its own recreation; a cancelled one may only come back while nothing else is open
+        if (old.IsCancelled && await EpochLifecycle.OpenEpochAsync(_producerRepo, _submissionRepo, _quorumRepo) is { } open)
+        {
+            return Conflict(new
+            {
+                error = $"Epoch {open.EpochId} is still open. Only one epoch can be open at a time.",
+                code = "epoch-open",
+                epochId = open.EpochId
+            });
+        }
 
         var unregisteredIds = await UnregisteredProducerIdsAsync(old.ProducerIds);
         if (unregisteredIds.Count > 0)
@@ -251,6 +199,7 @@ public class AdminController : ControllerBase
                 old.StartDate, old.ProducerIds.OrderBy(id => id, StringComparer.Ordinal).ToList(), old.UsageType, old.QuorumPeriodId);
             // Keep the replaced epoch's place in the timeline instead of ending whichever epoch is current
             epoch.EndDate = old.EndDate;
+            epoch.MonthCount = old.MonthCount;
             await _producerRepo.AddEpochAsync(epoch);
             await _producerRepo.CancelEpochAsync(old.EpochId, NormalizeReason(request?.Reason), epoch.EpochId);
             await tx.CommitAsync();
@@ -368,7 +317,14 @@ public class AdminController : ControllerBase
         var periods = await _quorumRepo.GetAllPeriodsAsync();
         foreach (var p in periods)
             await EpochLifecycle.CompletePeriodIfAnsweredAsync(p, _quorumRepo);
-        return Ok(new QuorumPeriodListResponse { Periods = periods.Select(p => new QuorumPeriodSummary(p)).ToList() });
+        var epochs = await _producerRepo.GetAllEpochsAsync();
+        var openEpoch = await EpochLifecycle.OpenEpochAsync(_producerRepo, _submissionRepo, _quorumRepo);
+        return Ok(new QuorumPeriodListResponse
+        {
+            Periods = periods
+                .Select(p => new QuorumPeriodSummary(p).WithNextEpoch(p, epochs.Where(e => e.QuorumPeriodId == p.PeriodId).ToList(), openEpoch))
+                .ToList()
+        });
     }
 
     /// <summary>
@@ -421,16 +377,10 @@ public class AdminController : ControllerBase
         QuorumComplete = await EpochLifecycle.IsQuorumCompleteAsync(e, _quorumRepo),
         CancelledAt = e.CancelledAt,
         CancelReason = e.CancelReason,
-        ReplacedByEpochId = e.ReplacedByEpochId
+        ReplacedByEpochId = e.ReplacedByEpochId,
+        MaskBits = e.MaskBits,
+        MonthCount = e.MonthCount
     };
-
-    private static DateTime FirstDayOfNextMonthUtc()
-    {
-        // Note: This is used for AddProducer endpoint which normalizes to next month.
-        // ResetAndCreateEpoch resolves the epoch to the first day of the requested month.
-        var now = DateTime.UtcNow;
-        return new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1);
-    }
 
     private static bool TryResolveEpochStartDate(string? startMonth, out DateTime startDate)
     {
@@ -554,7 +504,7 @@ public class AdminController : ControllerBase
         {
             foreach (var country in EpochGrid.Countries)
             {
-                foreach (var month in EpochGrid.Months(epoch.StartDate))
+                foreach (var month in EpochGrid.Months(epoch))
                 {
                     foreach (var (indicator, segment) in EpochGrid.Series)
                     {
@@ -599,6 +549,8 @@ public class AdminController : ControllerBase
             CancelledAt = epoch.CancelledAt,
             CancelReason = epoch.CancelReason,
             ReplacedByEpochId = epoch.ReplacedByEpochId,
+            MaskBits = epoch.MaskBits,
+            MonthCount = epoch.MonthCount,
             Partners = partners,
             QuorumPartners = period == null ? new() : period.ProducerIds.Select(id =>
             {

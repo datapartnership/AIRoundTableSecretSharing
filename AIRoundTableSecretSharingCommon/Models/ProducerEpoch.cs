@@ -24,6 +24,8 @@ public class ProducerEpoch
     public int? ReplacedByEpochId { get; set; }
     /// <summary>Width of the metric value masking: 128, or 64 for epochs created before 128-bit values.</summary>
     public int MaskBits { get; set; } = 128;
+    /// <summary>Reporting months: a quarter, or 4 for epochs created before quarterly epochs.</summary>
+    public int MonthCount { get; set; } = EpochGrid.QuarterMonths;
     [NotMapped]
     public bool IsCancelled => CancelledAt != null;
     [NotMapped]

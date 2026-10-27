@@ -301,11 +301,30 @@ This test executes the full protocol in sequence and validates the final aggrega
 
 ### TC-EPOCH-CANCEL-04 — Admin recreates an epoch
 **When** an admin calls `POST /api/admin/epochs/{id}/recreate` on an open or cancelled-but-not-replaced epoch  
-**Then** a new epoch is created with the same start month and partners, the old epoch is cancelled with `replacedByEpochId` set, and key exchange starts over; recreating it again returns `409` with `code: "already-replaced"`; a closed epoch returns `409` with `code: "epoch-closed"`
+**Then** a new epoch is created with the same start month, months and partners, the old epoch is cancelled with `replacedByEpochId` set, and key exchange starts over; recreating it again returns `409` with `code: "already-replaced"`; a closed epoch returns `409` with `code: "epoch-closed"`; recreating a cancelled epoch while another epoch is open returns `409` with `code: "epoch-open"`
 
 ### TC-EPOCH-CANCEL-05 — Blocked key recovery points to support
 **Given** the key exchange has started and the browser has no private key for the registered key  
 **Then** the warning names datapartnership@worldbank.org as a mailto link
+
+### TC-EPOCH-NEXT-01 — Epochs wait for the Quorum Check
+**Given** Quorum Check period P is still answering  
+**When** an admin calls `POST /api/admin/quorum-periods/{P}/next-epoch`  
+**Then** response is `409` with `code: "quorum-incomplete"`; a cancelled period returns `409` with `code: "period-cancelled"`
+
+### TC-EPOCH-NEXT-02 — Quarters are created in order
+**Given** period P starting 2027-01 is complete and has no epochs  
+**When** the admin creates its next epoch four times, each after the previous one closed  
+**Then** the epochs start 2027-01, 2027-04, 2027-07 and 2027-10, each with `monthCount: 3` and P's partners; a fifth call returns `409` with `code: "period-full"`
+
+### TC-EPOCH-NEXT-03 — Only one epoch is open at a time
+**Given** an epoch of any usage type is neither closed nor cancelled  
+**When** the admin creates the next epoch of any period  
+**Then** response is `409` with `code: "epoch-open"` and its `epochId`; after cancelling it, the call succeeds and the cancelled quarter is skipped (redo it with recreate)
+
+### TC-EPOCH-NEXT-04 — 4-month epochs keep their months
+**Given** an epoch created before the `QuarterlyEpochs` migration  
+**Then** after migrating, its `monthCount` is 4, it still needs 200 rows, and its aggregates are unchanged
 
 ## 11. Quorum Check CSV Validation
 

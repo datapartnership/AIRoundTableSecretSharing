@@ -175,6 +175,11 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                         .HasColumnType("int")
                         .HasDefaultValue(128);
 
+                    b.Property<int>("MonthCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(3);
+
                     b.Property<int>("ProducerCount")
                         .HasColumnType("int");
 

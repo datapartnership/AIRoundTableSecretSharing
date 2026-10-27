@@ -36,12 +36,6 @@ public class EfProducerRepository : IProducerRepository
             .Where(p => ids.Contains(p.ProducerId))
             .ToListAsync();
 
-    public async Task AddProducerAsync(ProducerInfo producer)
-    {
-        _db.Producers.Add(producer);
-        await _db.SaveChangesAsync();
-    }
-
     public async Task UpsertProducerAsync(ProducerInfo producer)
     {
         var existing = await _db.Producers.FindAsync(producer.ProducerId);

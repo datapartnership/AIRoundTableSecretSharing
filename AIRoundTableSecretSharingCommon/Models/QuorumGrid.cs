@@ -86,7 +86,7 @@ public static class QuorumGrid
         var ignored = cells.Where(c => c.Ignored).Select(c => PairKey(c.Country, c.Indicator)).ToHashSet(StringComparer.Ordinal);
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var country in EpochGrid.Countries)
-            foreach (var month in EpochGrid.Months(epoch.StartDate))
+            foreach (var month in EpochGrid.Months(epoch))
                 foreach (var (indicator, segment) in EpochGrid.Series)
                     if (ignored.Contains(PairKey(country, indicator)))
                         keys.Add(EpochGrid.CellKey(country, month, indicator, segment));
