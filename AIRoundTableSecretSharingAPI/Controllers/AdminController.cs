@@ -605,7 +605,8 @@ public class AdminController : ControllerBase
                 Indicator = c.Indicator,
                 ParticipantCount = c.ParticipantCount,
                 Ignored = c.Ignored,
-                Signature = c.Signature
+                Signature = c.Signature,
+                Unverified = c.Unverified
             }).ToList(),
             MissingProducers = missingProducers,
             Aggregates = aggregates

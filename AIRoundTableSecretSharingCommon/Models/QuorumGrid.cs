@@ -8,7 +8,8 @@ public sealed record QuorumCellResult(
     string Indicator,
     int ParticipantCount,
     bool Ignored,
-    string Signature);
+    string Signature,
+    bool Unverified = false);
 
 /// <summary>
 /// Quorum Check grid: one answer per country and indicator (5 × 3). An answer applies to every month and segment of
@@ -47,7 +48,13 @@ public static class QuorumGrid
                 var count = SecureNoiseGenerator.SumMasked(rows.Select(r => r.MaskedCount));
                 var tagA = SecureNoiseGenerator.SumMasked(rows.Select(r => r.MaskedTagA));
                 var tagB = SecureNoiseGenerator.SumMasked(rows.Select(r => r.MaskedTagB));
-                var n = (int)Math.Clamp(count, 0, period.ProducerIds.Count);
+                // A sum outside [0, partners] means the masks did not cancel; the metric can't be verified, so it gets no data
+                if (count < 0 || count > period.ProducerIds.Count)
+                {
+                    results.Add(new QuorumCellResult(country, indicator, -1, true, string.Empty, Unverified: true));
+                    continue;
+                }
+                var n = (int)count;
                 // Nobody participating has no composition to fingerprint
                 var signature = n == 0
                     ? string.Empty

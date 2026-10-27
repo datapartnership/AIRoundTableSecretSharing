@@ -166,6 +166,8 @@ public class QuorumCellInfo
     public int ParticipantCount { get; set; }
     public bool Ignored { get; set; }
     public string Signature { get; set; } = string.Empty;
+    /// <summary>The masked answers did not sum to a valid count, so the metric is ignored.</summary>
+    public bool Unverified { get; set; }
 }
 
 public class QuorumPeriodSummary

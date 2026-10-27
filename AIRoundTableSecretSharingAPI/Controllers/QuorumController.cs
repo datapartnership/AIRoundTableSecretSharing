@@ -144,6 +144,11 @@ public class QuorumController : ControllerBase
         await EpochLifecycle.CompletePeriodIfAnsweredAsync(period, _quorumRepo);
         var answers = await _quorumRepo.GetAnswersAsync(period.PeriodId);
         var counts = QuorumGrid.AnsweredCounts(period, answers);
+        var cells = QuorumGrid.Evaluate(period, answers);
+        var unverified = cells.Where(c => c.Unverified).Select(c => QuorumGrid.PairKey(c.Country, c.Indicator)).ToList();
+        if (unverified.Count > 0)
+            _logger.LogWarning("Quorum Check period {PeriodId}: masks did not cancel for {Cells}; these metrics are ignored",
+                period.PeriodId, string.Join(", ", unverified));
 
         return new QuorumStatusResponse
         {
@@ -155,7 +160,7 @@ public class QuorumController : ControllerBase
             MyAnsweredAt = answers.Where(r => r.ProducerId == producerId).Select(r => (DateTime?)r.SubmittedAt).Max(),
             AnsweredPartners = counts.Count(c => c.Value >= QuorumGrid.CellCount),
             PartnerCount = period.ProducerIds.Count,
-            IgnoredMetrics = QuorumGrid.Evaluate(period, answers)
+            IgnoredMetrics = cells
                 .Where(c => c.Ignored)
                 .Select(c => new QuorumMetric { Country = c.Country, Indicator = c.Indicator })
                 .ToList()
