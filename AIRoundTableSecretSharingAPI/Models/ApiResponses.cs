@@ -211,8 +211,9 @@ public class QuorumMetric
 /// <summary>Partner-facing quorum state: progress, plus the metrics that fell below the quorum once it is complete.</summary>
 public class QuorumStatusResponse
 {
-    public string UsageType { get; set; } = UsageTypes.Api;
-    /// <summary>Null when no Quorum Check period covers today.</summary>
+    /// <summary>Null when there is no period.</summary>
+    public string? UsageType { get; set; }
+    /// <summary>Null when no Quorum Check is active.</summary>
     public QuorumPeriodSummary? Period { get; set; }
     public bool IsEligible { get; set; }
     public bool QuorumComplete { get; set; }

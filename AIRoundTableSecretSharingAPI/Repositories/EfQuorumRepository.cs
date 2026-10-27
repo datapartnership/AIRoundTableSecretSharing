@@ -16,12 +16,10 @@ public class EfQuorumRepository : IQuorumRepository
     public Task<List<QuorumPeriod>> GetAllPeriodsAsync() =>
         _db.QuorumPeriods.OrderByDescending(p => p.StartDate).ThenByDescending(p => p.PeriodId).ToListAsync();
 
-    public Task<QuorumPeriod?> GetPeriodForDateAsync(string usageType, DateTime date) =>
+    public Task<QuorumPeriod?> GetActivePeriodAsync() =>
         _db.QuorumPeriods
-            .Where(p => p.UsageType == usageType && p.CancelledAt == null
-                        && p.StartDate <= date && p.StartDate.AddMonths(QuorumPeriod.MonthCount) > date)
-            .OrderByDescending(p => p.StartDate)
-            .ThenByDescending(p => p.PeriodId)
+            .Where(p => p.CancelledAt == null && !p.QuorumComplete)
+            .OrderByDescending(p => p.PeriodId)
             .FirstOrDefaultAsync();
 
     public async Task AddPeriodAsync(QuorumPeriod period)

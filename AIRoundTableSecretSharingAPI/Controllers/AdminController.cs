@@ -291,11 +291,12 @@ public class AdminController : ControllerBase
 
     /// <summary>
     /// Opens a Quorum Check period: one check covering every epoch of a usage type for 12 months.
-    /// Its partners are the partners of every epoch created in it.
+    /// Its partners are the partners of every epoch created in it. Only one period can be unfinished at a time.
     /// </summary>
     [HttpPost("quorum-periods")]
     [ProducesResponseType(typeof(QuorumPeriodSummary), 200)]
     [ProducesResponseType(400)]
+    [ProducesResponseType(409)]
     public async Task<ActionResult<QuorumPeriodSummary>> CreateQuorumPeriod([FromBody] CreateQuorumPeriodRequest request)
     {
         if (!UsageTypes.IsValid(request.UsageType))
@@ -319,6 +320,17 @@ public class AdminController : ControllerBase
         var unregisteredIds = await UnregisteredProducerIdsAsync(ids);
         if (unregisteredIds.Count > 0)
             return BadRequest(new { error = "Every producer must be an active registered partner.", unregisteredProducerIds = unregisteredIds });
+
+        // Partners answer one Quorum Check at a time, across usage types
+        if (await EpochLifecycle.ActivePeriodAsync(_quorumRepo) is { } active)
+        {
+            return Conflict(new
+            {
+                error = $"Quorum Check period {active.PeriodId} ({active.UsageType}) is still answering. Cancel it or wait until every partner has answered.",
+                code = "period-active",
+                periodId = active.PeriodId
+            });
+        }
 
         var periods = await _quorumRepo.GetAllPeriodsAsync();
         var end = startDate.AddMonths(QuorumPeriod.MonthCount);

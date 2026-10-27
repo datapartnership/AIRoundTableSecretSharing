@@ -60,6 +60,17 @@ public static class EpochLifecycle
         period.QuorumComplete = true;
     }
 
+    /// <summary>The one unfinished Quorum Check period, of any usage type; null once it is complete or cancelled.</summary>
+    public static async Task<QuorumPeriod?> ActivePeriodAsync(IQuorumRepository quorum)
+    {
+        var period = await quorum.GetActivePeriodAsync();
+        if (period == null)
+            return null;
+        // Completion is recorded lazily, so the last answer may not have marked it yet
+        await CompletePeriodIfAnsweredAsync(period, quorum);
+        return period.QuorumComplete ? null : period;
+    }
+
     public const string SupportEmail = "datapartnership@worldbank.org";
 
     /// <summary>Returns an error payload when an admin cancelled the epoch, otherwise null.</summary>

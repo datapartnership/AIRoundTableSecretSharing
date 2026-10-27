@@ -105,21 +105,18 @@ public class QuorumController : ControllerBase
         });
     }
 
-    /// <summary>The caller's view of the current Quorum Check period of a usage type.</summary>
+    /// <summary>The caller's view of the one active (unfinished) Quorum Check period, of any usage type.</summary>
     [HttpGet("current")]
     [ProducesResponseType(typeof(QuorumStatusResponse), 200)]
-    [ProducesResponseType(400)]
-    public async Task<ActionResult<QuorumStatusResponse>> GetCurrent([FromQuery] string usageType)
+    public async Task<ActionResult<QuorumStatusResponse>> GetCurrent()
     {
         var producerId = User.GetOid();
         if (string.IsNullOrEmpty(producerId))
             return Unauthorized();
-        if (!UsageTypes.IsValid(usageType))
-            return BadRequest(new { error = "usageType must be api or chat" });
 
-        var period = await _quorumRepo.GetPeriodForDateAsync(usageType, DateTime.UtcNow);
+        var period = await EpochLifecycle.ActivePeriodAsync(_quorumRepo);
         if (period == null)
-            return Ok(new QuorumStatusResponse { UsageType = usageType });
+            return Ok(new QuorumStatusResponse());
         return Ok(await BuildStatusAsync(period, producerId));
     }
 
