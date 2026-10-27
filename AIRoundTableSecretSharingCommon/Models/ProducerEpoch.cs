@@ -22,6 +22,8 @@ public class ProducerEpoch
     public string? CancelReason { get; set; }
     /// <summary>The epoch created to replace this one when an admin recreated it.</summary>
     public int? ReplacedByEpochId { get; set; }
+    /// <summary>Width of the metric value masking: 128, or 64 for epochs created before 128-bit values.</summary>
+    public int MaskBits { get; set; } = 128;
     [NotMapped]
     public bool IsCancelled => CancelledAt != null;
     [NotMapped]

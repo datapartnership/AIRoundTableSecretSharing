@@ -7,8 +7,8 @@ public class SubmissionResult
     public string ProducerId { get; set; } = string.Empty;
     
     // MAU values
-    public long OriginalValue { get; set; }
-    public long MaskedValue { get; set; }
-    public long NoiseApplied { get; set; }
-    public Dictionary<string, long> NoiseBreakdown { get; set; } = new();
+    public Int128 OriginalValue { get; set; }
+    public Int128 MaskedValue { get; set; }
+    public Int128 NoiseApplied { get; set; }
+    public Dictionary<string, Int128> NoiseBreakdown { get; set; } = new();
 }

@@ -100,6 +100,8 @@ public class EpochSummary
     public DateTime? CancelledAt { get; set; }
     public string? CancelReason { get; set; }
     public int? ReplacedByEpochId { get; set; }
+    /// <summary>Width the partners mask metric values with: 128, or 64 for older epochs.</summary>
+    public int MaskBits { get; set; }
     public bool IsCancelled => CancelledAt != null;
     public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<string> ProducerIds { get; set; } = new();
@@ -141,6 +143,8 @@ public class EpochDetailResponse
     public DateTime? CancelledAt { get; set; }
     public string? CancelReason { get; set; }
     public int? ReplacedByEpochId { get; set; }
+    /// <summary>Width the partners mask metric values with: 128, or 64 for older epochs.</summary>
+    public int MaskBits { get; set; }
     public bool IsCancelled => CancelledAt != null;
     public string Phase => IsCancelled ? "cancelled" : IsClosed ? "closed" : QuorumComplete ? "submission" : "quorum";
     public List<EpochPartnerInfo> Partners { get; set; } = new();

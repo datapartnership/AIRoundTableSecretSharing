@@ -97,28 +97,32 @@ byte[] secret_AC = myKem.Decapsulate(ciphertext_CA);
 
 #### Phase 4: Generate Noise and Submit
 
-Noise is derived per cell (country, month, indicator, segment) using HMAC-SHA256 with the shared secret as the key. The noise is the full signed 64-bit integer from the first 8 bytes of the HMAC, and all masking is done with wrap-around (mod 2^64) arithmetic. The sign depends on alphabetical order — the smaller partner adds, the larger subtracts:
+Noise is derived per cell (country, month, indicator, segment) using HMAC-SHA256 with the shared secret as the key. Metric values are masked at the epoch's width, `MaskBits`. It is 128 for new epochs, and 64 for epochs created before 128-bit values. The noise is the full signed integer from the first `MaskBits / 8` bytes of the HMAC, and all masking is done with wrap-around (mod 2^MaskBits) arithmetic. The sign depends on alphabetical order — the smaller partner adds, the larger subtracts:
 
 ```csharp
 // SecureNoiseGenerator.cs
 var hmac   = new HMACSHA256(sharedSecret);
 var hash   = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}"));
-var noise  = BitConverter.ToInt64(hash, 0);         // first 8 bytes as LE signed int64
+var noise  = BinaryPrimitives.ReadInt128LittleEndian(hash);   // first 16 bytes as LE signed Int128
 
 int sign = (myId < otherId) ? +1 : -1;   // smaller partner adds, larger subtracts
 
-maskedValue = unchecked(actualValue + Σ(noise × sign))   // mod 2^64
+maskedValue = unchecked(actualValue + Σ(noise × sign))   // mod 2^128
 ```
 
-The aggregator receives only `maskedValue`. Because the noise is uniform over the whole int64 range, each masked value is itself uniformly random and reveals nothing about the actual value; the aggregator cannot reproduce the noise without the shared secrets.
+A partner can submit values from 0 to 2^127 − 1, or 2^63 − 1 in a 64-bit epoch. The aggregator receives only `maskedValue`. Because the noise is uniform over the whole range, each masked value is itself uniformly random and reveals nothing about the actual value; the aggregator cannot reproduce the noise without the shared secrets.
+
+The low 64 bits of the 128-bit noise are the 64-bit noise. The Quorum Check answers (`MaskedCount`, `MaskedTagA/B`) are always masked at 64 bits.
 
 #### Aggregation
 
-The aggregator sums all masked values with the same wrap-around arithmetic (`SecureNoiseGenerator.SumMasked`). The noise cancels exactly mod 2^64, leaving the true total as long as it fits in a signed int64:
+The aggregator sums all masked values with the same wrap-around arithmetic (`SecureNoiseGenerator.SumMasked(values, epoch.MaskBits)`). The noise cancels exactly mod 2^MaskBits, leaving the true total as long as it fits in the signed range:
 
 ```
-Σ(maskedValue) mod 2^64 = Σ(actualValue) + 0 = Total ✓
+Σ(maskedValue) mod 2^128 = Σ(actualValue) + 0 = Total ✓
 ```
+
+Submissions are stored as decimal strings (`varchar(40)`, since SQL Server has no 128-bit integer). Values of 64-bit epochs are stored sign-extended, so for those the 128-bit sum is truncated to 64 bits.
 
 ### Mathematical Proof (3 Partners)
 
@@ -202,7 +206,7 @@ AIRoundTableSecretSharing/
 ├── AIRoundTableSecretSharingCommon/       # Shared library
 │   ├── Core/
 │   │   ├── MlKemKeyExchange.cs            # ML-KEM-768 key gen, encapsulate, decapsulate
-│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 full-width noise (mod 2^64)
+│   │   ├── SecureNoiseGenerator.cs        # HMAC-SHA256 full-width noise (mod 2^128 / 2^64)
 │   │   └── DeterministicNoiseGenerator.cs # Hash-based noise (legacy console demo)
 │   ├── Models/                            # Shared DTOs (MetricSubmission, ProducerInfo, …)
 │   └── Producers/
@@ -264,7 +268,7 @@ public class MlKemKeyExchange : IDisposable
 
 ### SecureNoiseGenerator.cs
 
-Derives full-width pairwise noise from a shared secret using HMAC-SHA256, and provides wrap-around helpers for masking and aggregation:
+Derives full-width pairwise noise from a shared secret using HMAC-SHA256, and provides wrap-around helpers for masking and aggregation. The 64-bit versions serve the Quorum Check; metric values use the Int128 versions:
 
 ```csharp
 public static long GenerateNoise(byte[] sharedSecret, string country, string month,
@@ -275,8 +279,14 @@ public static long GenerateNoise(byte[] sharedSecret, string country, string mon
     return BitConverter.ToInt64(hash, 0);
 }
 
+// Same HMAC, first 16 bytes; its low 64 bits equal GenerateNoise
+public static Int128 GenerateNoise128(byte[] sharedSecret, string country, string month,
+                                      string indicator, string segment);
+
 public static long ApplyNoise(long value, long noise, int sign) => unchecked(value + noise * sign);
 public static long SumMasked(IEnumerable<long> values) { /* unchecked running sum */ }
+public static Int128 ApplyNoise(Int128 value, Int128 noise, int sign) => unchecked(value + noise * sign);
+public static Int128 SumMasked(IEnumerable<Int128> values, int maskBits) { /* mod 2^maskBits */ }
 
 // Smaller partner (alphabetically) adds; larger subtracts → noise cancels in the sum
 public static int GetNoiseSign(string myId, string otherId)

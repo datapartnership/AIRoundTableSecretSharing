@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -36,6 +37,25 @@ public static class SecureNoiseGenerator
     }
 
     /// <summary>
+    /// 128-bit variant of <see cref="GenerateNoise"/> for metric values: the first 16 bytes
+    /// of the same HMAC as a little-endian signed Int128. Its low 64 bits equal the 64-bit noise.
+    /// </summary>
+    public static Int128 GenerateNoise128(
+        byte[] sharedSecret,
+        string country,
+        string month,
+        string indicator,
+        string segment)
+    {
+        var contextBytes = Encoding.UTF8.GetBytes($"{country}|{month}|{indicator}|{segment}");
+
+        using var hmac = new HMACSHA256(sharedSecret);
+        var hash = hmac.ComputeHash(contextBytes);
+
+        return BinaryPrimitives.ReadInt128LittleEndian(hash);
+    }
+
+    /// <summary>
     /// Applies signed noise to a value with wrap-around (mod 2^64) arithmetic.
     /// </summary>
     public static long ApplyNoise(long value, long noise, int sign) =>
@@ -50,6 +70,24 @@ public static class SecureNoiseGenerator
         long total = 0;
         foreach (var v in values) total = unchecked(total + v);
         return total;
+    }
+
+    /// <summary>
+    /// Applies signed noise to a value with wrap-around (mod 2^128) arithmetic.
+    /// </summary>
+    public static Int128 ApplyNoise(Int128 value, Int128 noise, int sign) =>
+        unchecked(value + noise * sign);
+
+    /// <summary>
+    /// Sums masked metric values with wrap-around arithmetic at the epoch's mask width.
+    /// Values masked mod 2^64 are stored sign-extended, so their 128-bit sum truncated
+    /// to 64 bits is the mod 2^64 sum.
+    /// </summary>
+    public static Int128 SumMasked(IEnumerable<Int128> values, int maskBits)
+    {
+        Int128 total = 0;
+        foreach (var v in values) total = unchecked(total + v);
+        return maskBits == 64 ? unchecked((long)total) : total;
     }
 
     /// <summary>

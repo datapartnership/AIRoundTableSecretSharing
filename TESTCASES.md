@@ -188,6 +188,20 @@
 **Given** the same scenario as TC-AGG-02  
 **Then** the aggregate must equal exactly `V_A + V_B + V_C` with zero residual noise — any deviation indicates a bug in noise sign assignment or HMAC derivation
 
+### TC-AGG-128-01 — 128-bit values aggregate exactly
+**Given** a new epoch (`maskBits: 128`) with three partners  
+**And** each partner uploads `42535295865117307932921825928971026432` (2^125) for the same cell  
+**Then** the aggregate is exactly `127605887595351923798765477786913079296`, with no int64 truncation
+
+### TC-AGG-128-02 — Values above 2^127 − 1 are rejected
+**Given** a 128-bit epoch  
+**When** a CSV row has value `170141183460469231731687303715884105728` (2^127)  
+**Then** the file check rejects that row as "not a whole number above 0", and `170141183460469231731687303715884105727` is accepted
+
+### TC-AGG-128-03 — Epochs from before 128-bit values keep their totals
+**Given** an epoch created before the `Int128SubmissionValues` migration  
+**Then** after migrating, its `maskBits` is 64, its aggregates are unchanged, and its CSV check still caps values at `9223372036854775807`
+
 ### TC-AGG-04 — Aggregate is not retrievable by unauthenticated caller
 **When** `GET /api/metrics/aggregate` is called without a Bearer token  
 **Then** response is `401 Unauthorized`

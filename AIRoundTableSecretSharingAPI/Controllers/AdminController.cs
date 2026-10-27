@@ -572,7 +572,7 @@ public class AdminController : ControllerBase
                             Month = month,
                             Indicator = indicator,
                             Segment = segment,
-                            Total = SecureNoiseGenerator.SumMasked(cell.Select(s => s.Value)).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            Total = SecureNoiseGenerator.SumMasked(cell.Select(s => s.Value), epoch.MaskBits).ToString(System.Globalization.CultureInfo.InvariantCulture),
                             SubmissionCount = cell.Count,
                             ExpectedSubmissions = epoch.ProducerCount,
                             MissingProducers = new List<string>()

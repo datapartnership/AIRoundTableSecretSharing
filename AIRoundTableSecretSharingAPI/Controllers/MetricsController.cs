@@ -292,7 +292,7 @@ public class MetricsController : ControllerBase
             });
         }
 
-        long total = SecureNoiseGenerator.SumMasked(submissions.Select(s => s.Value));
+        var total = SecureNoiseGenerator.SumMasked(submissions.Select(s => s.Value), epoch.MaskBits);
 
         _logger.LogInformation(
             "AGGREGATION COMPLETE for {Country}/{Month}/{Indicator}/{Segment}: Total = {Total:N0} (noise canceled!)",

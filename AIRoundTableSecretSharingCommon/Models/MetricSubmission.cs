@@ -11,7 +11,7 @@ public class MetricSubmission
     /// <summary>
     /// Masked metric value (noise already applied client-side).
     /// </summary>
-    public long Value { get; set; }
+    public Int128 Value { get; set; }
 
     public int EpochId { get; set; }
     public string? Signature { get; set; }    // set server-side if applicable

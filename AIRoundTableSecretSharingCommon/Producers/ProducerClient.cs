@@ -94,7 +94,7 @@ public class ProducerClient
         Console.WriteLine();
         
         long maskedValue = actualValue;
-        var noiseBreakdown = new Dictionary<string, long>();
+        var noiseBreakdown = new Dictionary<string, Int128>();
         
         foreach (var otherProducerId in producerIds.Where(id => id != _producerId))
         {

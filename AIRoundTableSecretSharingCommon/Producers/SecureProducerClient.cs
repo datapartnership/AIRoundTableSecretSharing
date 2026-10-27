@@ -234,7 +234,7 @@ public class SecureProducerClient : IDisposable
         DateTime month,
         string indicator,
         string segment,
-        long actualValue)
+        Int128 actualValue)
     {
         if (!_keysRegistered || !_encapsulationDone || !_decapsulationDone)
         {
@@ -277,13 +277,13 @@ public class SecureProducerClient : IDisposable
         Console.WriteLine($"        (Aggregator CANNOT reproduce this!)");
         Console.WriteLine();
 
-        long maskedMAU = actualValue;
-        var noiseBreakdown = new Dictionary<string, long>();
+        Int128 maskedMAU = actualValue;
+        var noiseBreakdown = new Dictionary<string, Int128>();
 
         Console.WriteLine($"  MAU Noise Calculation:");
         foreach (var (otherProducerId, sharedSecret) in _sharedSecrets)
         {
-            var noise = SecureNoiseGenerator.GenerateNoise(
+            var noise = SecureNoiseGenerator.GenerateNoise128(
                 sharedSecret, country, monthStart.ToString("yyyy-MM"), indicator, segment);
             var sign = SecureNoiseGenerator.GetNoiseSign(_producerId, otherProducerId);
             var appliedNoise = unchecked(noise * sign);

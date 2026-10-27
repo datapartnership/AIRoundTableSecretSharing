@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using AIRoundTableSecretSharingAPI.Models;
 using AIRoundTableSecretSharingCommon.Models;
@@ -50,6 +51,7 @@ public class AppDbContext : DbContext
                 .HasConversion(listConverter, listComparer)
                 .HasColumnType("nvarchar(max)");
             e.Property(ep => ep.UsageType).HasDefaultValue(UsageTypes.Api);
+            e.Property(ep => ep.MaskBits).HasDefaultValue(128);
         });
 
         modelBuilder.Entity<QuorumPeriod>(e =>
@@ -73,6 +75,13 @@ public class AppDbContext : DbContext
             e.Property(s => s.Indicator).HasMaxLength(64);
             e.Property(s => s.Segment).HasMaxLength(64);
             e.Property(s => s.Signature).HasMaxLength(500);
+            // SQL Server has no 128-bit integer; store the masked value as its decimal string
+            e.Property(s => s.Value)
+                .HasConversion(
+                    v => v.ToString(CultureInfo.InvariantCulture),
+                    v => Int128.Parse(v, CultureInfo.InvariantCulture))
+                .HasMaxLength(40)
+                .IsUnicode(false);
             e.HasIndex(s => new { s.ProducerId, s.Country, s.Month, s.Indicator, s.Segment, s.EpochId }).IsUnique();
         });
 

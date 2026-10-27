@@ -117,6 +117,7 @@ public class RegistryController : ControllerBase
                 CancelledAt = e.CancelledAt,
                 CancelReason = e.CancelReason,
                 ReplacedByEpochId = e.ReplacedByEpochId,
+                MaskBits = e.MaskBits,
                 ProducerIds = e.ProducerIds,
                 IsEligible = isEligible,
                 MySubmissionComplete = isEligible && !e.IsCancelled && await MySubmissionCompleteAsync(e, producerId)

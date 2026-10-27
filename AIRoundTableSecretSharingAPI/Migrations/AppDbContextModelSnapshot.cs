@@ -17,7 +17,7 @@ namespace AIRoundTableSecretSharingAPI.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.13")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -79,8 +79,11 @@ namespace AIRoundTableSecretSharingAPI.Migrations
                     b.Property<DateTime>("SubmittedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<long>("Value")
-                        .HasColumnType("bigint");
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(40)");
 
                     b.HasKey("Id");
 
@@ -166,6 +169,11 @@ namespace AIRoundTableSecretSharingAPI.Migrations
 
                     b.Property<bool>("IsClosed")
                         .HasColumnType("bit");
+
+                    b.Property<int>("MaskBits")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(128);
 
                     b.Property<int>("ProducerCount")
                         .HasColumnType("int");
