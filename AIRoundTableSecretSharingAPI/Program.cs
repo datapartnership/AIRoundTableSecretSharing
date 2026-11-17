@@ -114,7 +114,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 }
 
-if (app.Environment.IsDevelopment())
+if (builder.Configuration.GetValue<bool>("Swagger:Enabled"))
 {
     app.MapOpenApi();
     app.MapScalarApiReference();

@@ -516,6 +516,7 @@ The API reads its settings from the application settings file and from environme
 | `AzureAd:PartnerGroupId` | `AzureAd__PartnerGroupId` | Object id of the partner security group |
 | `ConnectionStrings:DefaultConnection` | `ConnectionStrings__DefaultConnection` | Azure SQL connection string |
 | `Cors:AllowedOrigins` | `Cors__AllowedOrigins` | Comma-separated origins allowed to call the API, for example the browser application's address |
+| `Swagger:Enabled` | `Swagger__Enabled` | Serve the interactive API reference and OpenAPI document; disabled by default and enabled in Development |
 
 Tenant-specific values and connection strings should be provided through the environment, for example App Service or Container Apps settings, and not built into images.
 
