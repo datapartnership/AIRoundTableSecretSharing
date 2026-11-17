@@ -1,56 +1,94 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
- branches:
-   include:
-     - qa
- paths:
-   exclude:
-     - Azure-Pipelines/*
+  branches:
+    include:
+      - qa
+  paths:
+    exclude:
+      - Azure-Pipelines/*
 
 name: $(AppName)_Build_$(MajorReleaseNumber).$(MinorReleaseNumber).$(FixNumber).$(Build.BuildId)
+
 variables:
 - group: YAML-DOTNET-VSBUILD-VG
 - group: GenAIAdoptionIndex-API-QA-VG
+- name: AppName
+  value: 'AIRoundTableSecretSharingAPI'
+- name: BuildConfiguration
+  value: 'Release'
+- name: ApiProjectPath
+  value: 'AIRoundTableSecretSharingAPI\AIRoundTableSecretSharingAPI.csproj'
+- name: PublishFolder
+  value: '$(Build.ArtifactStagingDirectory)\publish'
+
 stages:
- - stage: CIBuild
-   jobs:
-   - job: Phase_1
-     displayName: Agent job 1
-     cancelTimeoutInMinutes: 1
-     pool:
+- stage: CIBuild
+  displayName: Build
+  jobs:
+  - job: Phase_1
+    displayName: Build and package
+    cancelTimeoutInMinutes: 1
+    pool:
       name: $(AgentPoolCI)
       demands:
         - agent.computerName -equals WBGMSTFA1001
-     steps:
-     - script: echo "name is $(Build.SourceBranchName)"
-     - task: CopyFiles@2
-       inputs:
+    steps:
+    - script: echo "Branch is $(Build.SourceBranchName)"
+      displayName: Show branch
+
+    - task: CopyFiles@2
+      displayName: Copy nuget.config
+      inputs:
         SourceFolder: $(OISScriptFolder)
         Contents: 'nuget.config'
-        TargetFolder: '$(build.sourcesdirectory)\$(NugetConfigTargetPath)'
+        TargetFolder: '$(Build.SourcesDirectory)$(NugetConfigTargetPath)'
         OverWrite: true
-     - task: NuGetToolInstaller@0
-       displayName: Use NuGet $(NugetVersion)
-       inputs:
+
+    - task: NuGetToolInstaller@0
+      displayName: Use NuGet $(NugetVersion)
+      inputs:
         versionSpec: '$(NugetVersion)'
-     - task: NuGetCommand@2
-       displayName: NuGet restore
-       inputs:
+
+    - task: NuGetCommand@2
+      displayName: NuGet restore
+      inputs:
         command: 'restore'
         restoreSolution: '$(SolutionFileName).sln'
         feedsToUse: 'config'
         nugetConfigPath: '$(NugetConfigPath)'
-     - task: VSBuild@1
-       displayName: BUILD SOLUTION
-       inputs:
-        solution: '$(SolutionFileName).sln'
-        msbuildArgs: /p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=false /p:PackageLocation="$(build.artifactstagingdirectory)\\"
-     - task: PublishBuildArtifacts@1
-       displayName: PUBLISH ARTIFACTS
-       inputs:
-        PathtoPublish: $(build.artifactstagingdirectory)
-        TargetPath: '\\my\share\$(Build.DefinitionName)\$(Build.BuildNumber)'
+
+    # Publish the API project (Common is built via ProjectReference) as plain files
+    - task: VSBuild@1
+      displayName: Build and publish API (Release, FileSystem)
+      inputs:
+        solution: '$(ApiProjectPath)'
+        configuration: '$(BuildConfiguration)'
+        msbuildArgs: >-
+          /p:DeployOnBuild=true
+          /p:WebPublishMethod=FileSystem
+          /p:PublishUrl="$(PublishFolder)"
+          /p:DeleteExistingFiles=true
+          /p:SkipInvalidConfigurations=false
+
+    # Fail the build if the app files are not at the publish root
+    - powershell: |
+        $files = Get-ChildItem "$(PublishFolder)" -Filter *.runtimeconfig.json
+        if (-not $files) { Write-Error "No .runtimeconfig.json at publish root"; exit 1 }
+        if ($files.Count -gt 1) { Write-Error "Multiple apps in publish folder: $($files.Name -join ', ')"; exit 1 }
+        Write-Host "Found: $($files.Name)"
+      displayName: Verify publish output
+
+    # Zip the folder contents so the DLLs sit at the zip root
+    - task: ArchiveFiles@2
+      displayName: Zip publish output
+      inputs:
+        rootFolderOrFile: '$(PublishFolder)'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)\$(ArtifactName)'
+        replaceExistingArchive: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: Publish artifact
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)\$(ArtifactName)'
+        ArtifactName: 'drop'

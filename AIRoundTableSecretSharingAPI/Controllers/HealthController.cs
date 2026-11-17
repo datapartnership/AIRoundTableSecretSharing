@@ -5,7 +5,7 @@ namespace AIRoundTableSecretSharingAPI.Controllers;
 
 [ApiController]
 [AllowAnonymous]
-[Route("health")]
+[Route("api/health")]
 public class HealthController : ControllerBase
 {
     [HttpGet]
