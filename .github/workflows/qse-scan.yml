@@ -15,7 +15,7 @@ env:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    runs-on: arm
 
     steps:
       - name: Check out repository
@@ -25,11 +25,17 @@ jobs:
         run: mkdir -p "${{ runner.temp }}/qse-results"
 
       - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run QSE scan
         run: |
+          uname -m   # should print aarch64
           docker run --rm \
+            --platform linux/arm64 \
             --user "$(id -u):$(id -g)" \
             -v "${{ github.workspace }}":/github/workspace:ro \
             -v "${{ runner.temp }}/qse-results":/tmp/qse-results \
