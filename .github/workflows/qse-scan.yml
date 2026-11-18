@@ -1,0 +1,42 @@
+name: QSE Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Set repository variable QSE_IMAGE (Settings > Secrets and variables > Actions > Variables)
+  # to the full image reference, e.g. registry.example.com/qse:1.0
+  QSE_IMAGE: ${{ vars.QSE_IMAGE }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare output folder
+        run: mkdir -p "${{ runner.temp }}/qse-results"
+
+      - name: Run QSE scan
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "${{ github.workspace }}":/github/workspace:ro \
+            -v "${{ runner.temp }}/qse-results":/tmp/qse-results \
+            -w /github/workspace \
+            "$QSE_IMAGE"
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qse-results
+          path: ${{ runner.temp }}/qse-results/
